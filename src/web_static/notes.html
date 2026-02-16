@@ -4,248 +4,229 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Karvis · 速记</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script>
-tailwind.config = { theme: { extend: { colors: {
-  warm: { 50:'#fdf8f6',100:'#f2e8e5',200:'#eaddd7',300:'#e0cfc7',400:'#d2bab0',500:'#bfa094',600:'#a18072',700:'#977669',800:'#846358',900:'#43302b' }
-}}}}
-</script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fdf8f6; padding-bottom: 64px; }
-.fade-in { animation: fadeIn .3s ease; }
-@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #f5f3f0; color: #3d3229; padding-bottom: 60px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 顶栏 */
+.topbar {
+  position: sticky; top: 0; z-index: 10;
+  background: rgba(245,243,240,.92); backdrop-filter: blur(12px);
+  border-bottom: 1px solid #e8e0d8;
+  padding: 14px 16px; text-align: center;
+}
+.topbar h1 { font-size: 17px; font-weight: 700; }
+
+/* 时间线 */
+.timeline { padding: 20px 16px 20px 16px; }
+
+/* 日期分隔 */
+.date-sep {
+  display: flex; align-items: center; gap: 10px;
+  margin: 20px 0 14px 0; padding: 0 4px;
+}
+.date-sep:first-child { margin-top: 4px; }
+.date-sep .line { flex: 1; height: 1px; background: #ddd5cc; }
+.date-sep .label {
+  font-size: 11px; font-weight: 600; color: #a18072;
+  letter-spacing: .5px; white-space: nowrap;
+  background: #f5f3f0; padding: 2px 10px; border-radius: 10px;
+  border: 1px solid #e8e0d8;
+}
+
+/* 卡片 */
+.note-card {
+  background: #fff; border-radius: 14px;
+  padding: 14px 16px; margin-bottom: 10px;
+  box-shadow: 0 1px 3px rgba(67,48,43,.06);
+  position: relative;
+  animation: slideUp .35s ease both;
+}
+.note-card .time {
+  font-size: 11px; color: #bfa094; margin-bottom: 6px;
+  display: flex; align-items: center; gap: 5px;
+}
+.note-card .time::before {
+  content: ''; display: inline-block;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #d2bab0;
+}
+.note-card .body {
+  font-size: 14px; line-height: 1.65; color: #43302b;
+  word-break: break-word;
+}
+.note-card .body a { color: #6366f1; text-decoration: underline; word-break: break-all; }
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 状态 */
+.state-box {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; padding: 80px 20px; color: #bfa094;
+}
+.state-box .icon { font-size: 48px; margin-bottom: 12px; }
+.state-box .msg { font-size: 14px; }
+
+/* 加载更多 */
+.load-more {
+  display: block; width: calc(100% - 32px); margin: 6px 16px 16px;
+  padding: 10px; border: none; border-radius: 12px;
+  background: #fff; color: #a18072; font-size: 13px;
+  box-shadow: 0 1px 3px rgba(67,48,43,.06); cursor: pointer;
+}
+.load-more:active { background: #f2e8e5; }
+
+/* 底栏 */
+.bottom-nav {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
+  background: #fff; border-top: 1px solid #e8e0d8;
+  display: flex; justify-content: space-around; padding: 6px 0 8px;
+}
+.bottom-nav a {
+  display: flex; flex-direction: column; align-items: center;
+  text-decoration: none; font-size: 10px; color: #bfa094; gap: 1px;
+}
+.bottom-nav a .ico { font-size: 18px; }
+.bottom-nav a.active { color: #846358; font-weight: 600; }
 </style>
 </head>
 <body>
 
-<!-- 顶栏 -->
-<header class="bg-white border-b border-warm-100 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
-  <h1 class="text-lg font-bold text-warm-900">📝 速记</h1>
-  <div class="flex items-center gap-2">
-    <input type="date" id="dateFilter"
-      class="text-sm border border-warm-200 rounded-lg px-2 py-1 text-warm-700 bg-white">
-    <button id="clearBtn" class="text-xs text-warm-500 underline hidden">清除</button>
-  </div>
-</header>
+<div class="topbar"><h1>📝 速记</h1></div>
 
-<!-- 加载状态 -->
-<div id="loadingView" class="flex items-center justify-center h-64">
-  <p class="text-warm-400">加载中...</p>
+<div id="loading" class="state-box">
+  <div class="icon">⏳</div>
+  <div class="msg">正在加载…</div>
 </div>
 
-<!-- 内容区 -->
-<div id="contentView" class="p-4 space-y-5 hidden"></div>
-
-<!-- 空状态 -->
-<div id="emptyView" class="hidden text-center text-warm-400 py-16">
-  <p class="text-4xl mb-3">📭</p>
-  <p id="emptyText">暂无速记</p>
+<div id="empty" class="state-box" style="display:none">
+  <div class="icon">📭</div>
+  <div class="msg">还没有速记，去企微聊天记录点吧</div>
 </div>
 
-<!-- 加载更多 -->
-<div id="loadMoreWrap" class="px-4 pb-4 hidden">
-  <button id="loadMoreBtn"
-    class="w-full py-2.5 text-sm text-warm-600 bg-white rounded-xl shadow-sm active:bg-warm-50 transition">
-    加载更多
-  </button>
-</div>
+<div id="timeline" class="timeline" style="display:none"></div>
 
-<!-- 底部导航 -->
-<nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-warm-100 flex justify-around py-2 text-xs z-10">
-  <a href="/web/dashboard" class="flex flex-col items-center text-warm-400"><span class="text-lg">📊</span>概览</a>
-  <a href="/web/notes" class="flex flex-col items-center text-warm-700 font-medium"><span class="text-lg">📝</span>速记</a>
-  <a href="/web/todos" class="flex flex-col items-center text-warm-400"><span class="text-lg">✅</span>待办</a>
-  <a href="/web/daily" class="flex flex-col items-center text-warm-400"><span class="text-lg">📖</span>日记</a>
-  <a href="/web/archive" class="flex flex-col items-center text-warm-400"><span class="text-lg">📁</span>笔记</a>
+<button id="moreBtn" class="load-more" style="display:none">加载更多</button>
+
+<nav class="bottom-nav">
+  <a href="/web/dashboard"><span class="ico">📊</span>概览</a>
+  <a href="/web/notes" class="active"><span class="ico">📝</span>速记</a>
+  <a href="/web/todos"><span class="ico">✅</span>待办</a>
+  <a href="/web/daily"><span class="ico">📖</span>日记</a>
+  <a href="/web/archive"><span class="ico">📁</span>笔记</a>
 </nav>
 
 <script>
-(function() {
-  /* ── 鉴权 ── */
+(function(){
   var token = localStorage.getItem('karvis_token');
   if (!token) { location.href = '/web/login'; return; }
-  var headers = { 'X-Token': token };
 
-  /* ── DOM 引用 ── */
-  var loadingView  = document.getElementById('loadingView');
-  var contentView  = document.getElementById('contentView');
-  var emptyView    = document.getElementById('emptyView');
-  var emptyText    = document.getElementById('emptyText');
-  var loadMoreWrap = document.getElementById('loadMoreWrap');
-  var loadMoreBtn  = document.getElementById('loadMoreBtn');
-  var dateFilter   = document.getElementById('dateFilter');
-  var clearBtn     = document.getElementById('clearBtn');
+  var $loading  = document.getElementById('loading');
+  var $empty    = document.getElementById('empty');
+  var $timeline = document.getElementById('timeline');
+  var $moreBtn  = document.getElementById('moreBtn');
 
-  /* ── 状态 ── */
-  var allNotes = [];
-  var hasMore  = false;
-  var offset   = 0;
-  var LIMIT    = 50;
+  var offset = 0, LIMIT = 50, hasMore = false;
+  var lastDate = '';
 
-  /* ── 工具函数 ── */
-  function renderMd(text) {
+  function esc(t) {
+    return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function md(text) {
     if (!text) return '';
-    var s = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    // Markdown 链接 [text](url)
-    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
-      '<a href="$2" class="text-blue-600 underline" target="_blank" rel="noopener">$1</a>');
-    // 裸 URL
-    s = s.replace(/(https?:\/\/[^\s<"]+)/g,
-      '<a href="$1" class="text-blue-600 underline break-all" target="_blank" rel="noopener">$1</a>');
+    var s = esc(text);
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+    s = s.replace(/(https?:\/\/[^\s<"]+)/g, '<a href="$1" target="_blank">$1</a>');
     s = s.replace(/\n/g, '<br>');
     return s;
   }
 
-  function groupByDate(notes) {
-    var map = {}, order = [];
+  function dateLabel(d) {
+    var now = new Date();
+    var today = [now.getFullYear(), String(now.getMonth()+1).padStart(2,'0'), String(now.getDate()).padStart(2,'0')].join('-');
+    var yd = new Date(now); yd.setDate(yd.getDate()-1);
+    var yesterday = [yd.getFullYear(), String(yd.getMonth()+1).padStart(2,'0'), String(yd.getDate()).padStart(2,'0')].join('-');
+    if (d === today) return '今天';
+    if (d === yesterday) return '昨天';
+    // 如果是今年就不显示年份
+    if (d.slice(0,4) === String(now.getFullYear())) return d.slice(5).replace('-', ' 月 ') + ' 日';
+    return d;
+  }
+
+  function appendNotes(notes) {
     for (var i = 0; i < notes.length; i++) {
-      var d = notes[i].time.slice(0, 10);
-      if (!map[d]) { map[d] = []; order.push(d); }
-      map[d].push(notes[i]);
-    }
-    return order.map(function(d) { return { date: d, items: map[d] }; });
-  }
+      var n = notes[i];
+      var d = n.time.slice(0, 10);
 
-  function todayLabel(dateStr) {
-    var today = new Date();
-    var y = today.getFullYear(), m = String(today.getMonth()+1).padStart(2,'0'), dd = String(today.getDate()).padStart(2,'0');
-    var todayStr = y + '-' + m + '-' + dd;
-    var yesterday = new Date(today); yesterday.setDate(yesterday.getDate()-1);
-    var yy = yesterday.getFullYear(), ym = String(yesterday.getMonth()+1).padStart(2,'0'), yd = String(yesterday.getDate()).padStart(2,'0');
-    var yStr = yy + '-' + ym + '-' + yd;
-    if (dateStr === todayStr) return '今天 · ' + dateStr;
-    if (dateStr === yStr) return '昨天 · ' + dateStr;
-    return dateStr;
-  }
-
-  /* ── 渲染 ── */
-  function render() {
-    contentView.innerHTML = '';
-
-    if (allNotes.length === 0) {
-      contentView.classList.add('hidden');
-      emptyView.classList.remove('hidden');
-      emptyText.textContent = dateFilter.value ? '这天没有速记' : '暂无速记';
-      loadMoreWrap.classList.add('hidden');
-      return;
-    }
-
-    emptyView.classList.add('hidden');
-    contentView.classList.remove('hidden');
-
-    var groups = groupByDate(allNotes);
-    for (var g = 0; g < groups.length; g++) {
-      var group = groups[g];
-
-      // 日期标题
-      var dateTag = document.createElement('div');
-      dateTag.className = 'fade-in';
-
-      var dateP = document.createElement('p');
-      dateP.className = 'text-xs font-semibold text-warm-500 mb-2 px-1';
-      dateP.textContent = todayLabel(group.date);
-      dateTag.appendChild(dateP);
-
-      // 卡片容器
-      var cardsDiv = document.createElement('div');
-      cardsDiv.className = 'space-y-2';
-
-      for (var n = 0; n < group.items.length; n++) {
-        var note = group.items[n];
-        var card = document.createElement('div');
-        card.className = 'bg-white rounded-xl px-4 py-3 shadow-sm fade-in';
-
-        var timeP = document.createElement('p');
-        timeP.className = 'text-xs text-warm-400 mb-1';
-        timeP.textContent = note.time.slice(11);
-
-        var bodyDiv = document.createElement('div');
-        bodyDiv.className = 'text-sm text-warm-800 leading-relaxed';
-        bodyDiv.innerHTML = renderMd(note.content);
-
-        card.appendChild(timeP);
-        card.appendChild(bodyDiv);
-        cardsDiv.appendChild(card);
+      // 新日期 → 插入日期分隔
+      if (d !== lastDate) {
+        lastDate = d;
+        var sep = document.createElement('div');
+        sep.className = 'date-sep';
+        sep.innerHTML = '<span class="line"></span><span class="label">' + dateLabel(d) + '</span><span class="line"></span>';
+        $timeline.appendChild(sep);
       }
 
-      dateTag.appendChild(cardsDiv);
-      contentView.appendChild(dateTag);
-    }
-
-    // 加载更多按钮
-    if (hasMore) {
-      loadMoreWrap.classList.remove('hidden');
-    } else {
-      loadMoreWrap.classList.add('hidden');
+      // 卡片
+      var card = document.createElement('div');
+      card.className = 'note-card';
+      card.style.animationDelay = (i * 40) + 'ms';
+      card.innerHTML =
+        '<div class="time">' + esc(n.time.slice(11)) + '</div>' +
+        '<div class="body">' + md(n.content) + '</div>';
+      $timeline.appendChild(card);
     }
   }
 
-  /* ── 数据加载 ── */
-  function fetchNotes(append) {
-    if (!append) {
-      offset = 0;
-      allNotes = [];
-      loadingView.classList.remove('hidden');
-      contentView.classList.add('hidden');
-      emptyView.classList.add('hidden');
-    }
+  function load(append) {
+    if (!append) { offset = 0; lastDate = ''; $timeline.innerHTML = ''; }
 
     var url = '/api/notes?limit=' + LIMIT + '&offset=' + offset;
-    if (dateFilter.value) url += '&date=' + dateFilter.value;
-
     var xhr = new XMLHttpRequest();
-    xhr.open('GET', url, true);
+    xhr.open('GET', url);
     xhr.setRequestHeader('X-Token', token);
     xhr.onload = function() {
+      $loading.style.display = 'none';
+
       if (xhr.status === 401) {
         localStorage.removeItem('karvis_token');
         location.href = '/web/login';
         return;
       }
-      try {
-        var d = JSON.parse(xhr.responseText);
-        var notes = d.notes || [];
-        if (append) {
-          for (var i = 0; i < notes.length; i++) allNotes.push(notes[i]);
-        } else {
-          allNotes = notes;
-        }
-        hasMore = d.has_more;
-        offset = allNotes.length;
-      } catch(e) {
-        console.error('JSON parse error:', e);
+
+      var d;
+      try { d = JSON.parse(xhr.responseText); } catch(e) { return; }
+
+      var notes = d.notes || [];
+      hasMore = d.has_more;
+      offset += notes.length;
+
+      if (!append && notes.length === 0) {
+        $empty.style.display = '';
+        $timeline.style.display = 'none';
+        $moreBtn.style.display = 'none';
+        return;
       }
-      loadingView.classList.add('hidden');
-      render();
+
+      $empty.style.display = 'none';
+      $timeline.style.display = '';
+      appendNotes(notes);
+      $moreBtn.style.display = hasMore ? '' : 'none';
     };
-    xhr.onerror = function() {
-      console.error('Network error');
-      loadingView.classList.add('hidden');
-      render();
-    };
+    xhr.onerror = function() { $loading.style.display = 'none'; };
     xhr.send();
   }
 
-  /* ── 事件绑定 ── */
-  dateFilter.addEventListener('change', function() {
-    clearBtn.classList.toggle('hidden', !dateFilter.value);
-    fetchNotes(false);
-  });
+  $moreBtn.onclick = function() { load(true); };
 
-  clearBtn.addEventListener('click', function() {
-    dateFilter.value = '';
-    clearBtn.classList.add('hidden');
-    fetchNotes(false);
-  });
-
-  loadMoreBtn.addEventListener('click', function() {
-    fetchNotes(true);
-  });
-
-  /* ── 首次加载 ── */
-  fetchNotes(false);
-
+  load(false);
 })();
 </script>
 </body>
