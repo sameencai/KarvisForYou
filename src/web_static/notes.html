@@ -10,118 +10,243 @@ tailwind.config = { theme: { extend: { colors: {
   warm: { 50:'#fdf8f6',100:'#f2e8e5',200:'#eaddd7',300:'#e0cfc7',400:'#d2bab0',500:'#bfa094',600:'#a18072',700:'#977669',800:'#846358',900:'#43302b' }
 }}}}
 </script>
-<script>
-const API_HEADERS = () => ({'X-Token': localStorage.getItem('karvis_token')||''});
-function checkAuth() { if(!localStorage.getItem('karvis_token')) location.href='/web/login'; }
-
-function notesApp() {
-  return {
-    notes: [], grouped: [], loading: true, hasMore: false, offset: 0, dateFilter: '',
-    init() { this.load(); },
-    load() {
-      checkAuth(); this.offset = 0; this.loading = true;
-      let url = '/api/notes?limit=50&offset=0';
-      if (this.dateFilter) url += `&date=${this.dateFilter}`;
-      fetch(url, {headers: API_HEADERS()})
-        .then(r => {
-          if (r.status === 401) { localStorage.removeItem('karvis_token'); location.href='/web/login'; return null; }
-          return r.json();
-        })
-        .then(d => {
-          if (!d) return;
-          this.notes = d.notes || [];
-          this.hasMore = d.has_more;
-          this.offset = this.notes.length;
-          this.grouped = this.groupByDate(this.notes);
-          this.loading = false;
-        })
-        .catch(e => { console.error(e); this.loading = false; });
-    },
-    loadMore() {
-      let url = `/api/notes?limit=50&offset=${this.offset}`;
-      if (this.dateFilter) url += `&date=${this.dateFilter}`;
-      fetch(url, {headers: API_HEADERS()})
-        .then(r => r.json())
-        .then(d => {
-          this.notes.push(...(d.notes||[]));
-          this.hasMore = d.has_more;
-          this.offset = this.notes.length;
-          this.grouped = this.groupByDate(this.notes);
-        })
-        .catch(e => { console.error(e); });
-    },
-    groupByDate(notes) {
-      const map = {};
-      const order = [];
-      for (const n of notes) {
-        const d = n.time.slice(0, 10);
-        if (!map[d]) { map[d] = []; order.push(d); }
-        map[d].push(n);
-      }
-      return order.map(d => ({ date: d, items: map[d] }));
-    },
-    renderMd(text) {
-      if (!text) return '';
-      let s = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" class="text-blue-600 underline" target="_blank">$1</a>');
-      s = s.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" class="text-blue-600 underline break-all" target="_blank">$1</a>');
-      s = s.replace(/\n/g, '<br>');
-      return s;
-    }
-  }
-}
-</script>
-<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <style>
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fdf8f6; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fdf8f6; padding-bottom: 64px; }
+.fade-in { animation: fadeIn .3s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 </style>
 </head>
-<body class="pb-20" x-data="notesApp()">
-  <div class="bg-white border-b border-warm-100 px-4 py-3 flex items-center justify-between">
-    <h1 class="text-lg font-bold text-warm-900">📝 速记</h1>
-    <div class="flex items-center gap-2">
-      <input type="date" x-model="dateFilter" @change="load()"
-        class="text-sm border border-warm-200 rounded-lg px-2 py-1 text-warm-700">
-      <button x-show="dateFilter" @click="dateFilter=''; load()"
-        class="text-xs text-warm-500 underline">清除</button>
-    </div>
+<body>
+
+<!-- 顶栏 -->
+<header class="bg-white border-b border-warm-100 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
+  <h1 class="text-lg font-bold text-warm-900">📝 速记</h1>
+  <div class="flex items-center gap-2">
+    <input type="date" id="dateFilter"
+      class="text-sm border border-warm-200 rounded-lg px-2 py-1 text-warm-700 bg-white">
+    <button id="clearBtn" class="text-xs text-warm-500 underline hidden">清除</button>
   </div>
+</header>
 
-  <div class="p-4 space-y-4" x-show="!loading">
-    <template x-for="(group, gi) in grouped" :key="gi">
-      <div>
-        <p class="text-xs font-medium text-warm-500 mb-2 sticky top-0 bg-warm-50 py-1" x-text="group.date"></p>
-        <div class="space-y-2">
-          <template x-for="(note, ni) in group.items" :key="gi+'-'+ni">
-            <div class="bg-white rounded-xl px-4 py-3 shadow-sm">
-              <p class="text-xs text-warm-400 mb-1" x-text="note.time.slice(11)"></p>
-              <div class="text-sm text-warm-800 leading-relaxed" x-html="renderMd(note.content)"></div>
-            </div>
-          </template>
-        </div>
-      </div>
-    </template>
-    <p x-show="!notes.length" class="text-center text-warm-400 py-8">
-      <span x-text="dateFilter ? '这天没有速记' : '暂无速记'"></span>
-    </p>
-    <button x-show="hasMore" @click="loadMore()"
-      class="w-full py-2 text-sm text-warm-600 bg-white rounded-xl shadow-sm">
-      加载更多
-    </button>
-  </div>
+<!-- 加载状态 -->
+<div id="loadingView" class="flex items-center justify-center h-64">
+  <p class="text-warm-400">加载中...</p>
+</div>
 
-  <div x-show="loading" class="flex items-center justify-center h-64">
-    <p class="text-warm-400">加载中...</p>
-  </div>
+<!-- 内容区 -->
+<div id="contentView" class="p-4 space-y-5 hidden"></div>
 
-  <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-warm-100 flex justify-around py-2 text-xs">
-    <a href="/web/dashboard" class="flex flex-col items-center text-warm-400"><span class="text-lg">📊</span>概览</a>
-    <a href="/web/notes" class="flex flex-col items-center text-warm-700 font-medium"><span class="text-lg">📝</span>速记</a>
-    <a href="/web/todos" class="flex flex-col items-center text-warm-400"><span class="text-lg">✅</span>待办</a>
-    <a href="/web/daily" class="flex flex-col items-center text-warm-400"><span class="text-lg">📖</span>日记</a>
-    <a href="/web/archive" class="flex flex-col items-center text-warm-400"><span class="text-lg">📁</span>笔记</a>
-  </nav>
+<!-- 空状态 -->
+<div id="emptyView" class="hidden text-center text-warm-400 py-16">
+  <p class="text-4xl mb-3">📭</p>
+  <p id="emptyText">暂无速记</p>
+</div>
 
+<!-- 加载更多 -->
+<div id="loadMoreWrap" class="px-4 pb-4 hidden">
+  <button id="loadMoreBtn"
+    class="w-full py-2.5 text-sm text-warm-600 bg-white rounded-xl shadow-sm active:bg-warm-50 transition">
+    加载更多
+  </button>
+</div>
 
+<!-- 底部导航 -->
+<nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-warm-100 flex justify-around py-2 text-xs z-10">
+  <a href="/web/dashboard" class="flex flex-col items-center text-warm-400"><span class="text-lg">📊</span>概览</a>
+  <a href="/web/notes" class="flex flex-col items-center text-warm-700 font-medium"><span class="text-lg">📝</span>速记</a>
+  <a href="/web/todos" class="flex flex-col items-center text-warm-400"><span class="text-lg">✅</span>待办</a>
+  <a href="/web/daily" class="flex flex-col items-center text-warm-400"><span class="text-lg">📖</span>日记</a>
+  <a href="/web/archive" class="flex flex-col items-center text-warm-400"><span class="text-lg">📁</span>笔记</a>
+</nav>
+
+<script>
+(function() {
+  /* ── 鉴权 ── */
+  var token = localStorage.getItem('karvis_token');
+  if (!token) { location.href = '/web/login'; return; }
+  var headers = { 'X-Token': token };
+
+  /* ── DOM 引用 ── */
+  var loadingView  = document.getElementById('loadingView');
+  var contentView  = document.getElementById('contentView');
+  var emptyView    = document.getElementById('emptyView');
+  var emptyText    = document.getElementById('emptyText');
+  var loadMoreWrap = document.getElementById('loadMoreWrap');
+  var loadMoreBtn  = document.getElementById('loadMoreBtn');
+  var dateFilter   = document.getElementById('dateFilter');
+  var clearBtn     = document.getElementById('clearBtn');
+
+  /* ── 状态 ── */
+  var allNotes = [];
+  var hasMore  = false;
+  var offset   = 0;
+  var LIMIT    = 50;
+
+  /* ── 工具函数 ── */
+  function renderMd(text) {
+    if (!text) return '';
+    var s = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // Markdown 链接 [text](url)
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
+      '<a href="$2" class="text-blue-600 underline" target="_blank" rel="noopener">$1</a>');
+    // 裸 URL
+    s = s.replace(/(https?:\/\/[^\s<"]+)/g,
+      '<a href="$1" class="text-blue-600 underline break-all" target="_blank" rel="noopener">$1</a>');
+    s = s.replace(/\n/g, '<br>');
+    return s;
+  }
+
+  function groupByDate(notes) {
+    var map = {}, order = [];
+    for (var i = 0; i < notes.length; i++) {
+      var d = notes[i].time.slice(0, 10);
+      if (!map[d]) { map[d] = []; order.push(d); }
+      map[d].push(notes[i]);
+    }
+    return order.map(function(d) { return { date: d, items: map[d] }; });
+  }
+
+  function todayLabel(dateStr) {
+    var today = new Date();
+    var y = today.getFullYear(), m = String(today.getMonth()+1).padStart(2,'0'), dd = String(today.getDate()).padStart(2,'0');
+    var todayStr = y + '-' + m + '-' + dd;
+    var yesterday = new Date(today); yesterday.setDate(yesterday.getDate()-1);
+    var yy = yesterday.getFullYear(), ym = String(yesterday.getMonth()+1).padStart(2,'0'), yd = String(yesterday.getDate()).padStart(2,'0');
+    var yStr = yy + '-' + ym + '-' + yd;
+    if (dateStr === todayStr) return '今天 · ' + dateStr;
+    if (dateStr === yStr) return '昨天 · ' + dateStr;
+    return dateStr;
+  }
+
+  /* ── 渲染 ── */
+  function render() {
+    contentView.innerHTML = '';
+
+    if (allNotes.length === 0) {
+      contentView.classList.add('hidden');
+      emptyView.classList.remove('hidden');
+      emptyText.textContent = dateFilter.value ? '这天没有速记' : '暂无速记';
+      loadMoreWrap.classList.add('hidden');
+      return;
+    }
+
+    emptyView.classList.add('hidden');
+    contentView.classList.remove('hidden');
+
+    var groups = groupByDate(allNotes);
+    for (var g = 0; g < groups.length; g++) {
+      var group = groups[g];
+
+      // 日期标题
+      var dateTag = document.createElement('div');
+      dateTag.className = 'fade-in';
+
+      var dateP = document.createElement('p');
+      dateP.className = 'text-xs font-semibold text-warm-500 mb-2 px-1';
+      dateP.textContent = todayLabel(group.date);
+      dateTag.appendChild(dateP);
+
+      // 卡片容器
+      var cardsDiv = document.createElement('div');
+      cardsDiv.className = 'space-y-2';
+
+      for (var n = 0; n < group.items.length; n++) {
+        var note = group.items[n];
+        var card = document.createElement('div');
+        card.className = 'bg-white rounded-xl px-4 py-3 shadow-sm fade-in';
+
+        var timeP = document.createElement('p');
+        timeP.className = 'text-xs text-warm-400 mb-1';
+        timeP.textContent = note.time.slice(11);
+
+        var bodyDiv = document.createElement('div');
+        bodyDiv.className = 'text-sm text-warm-800 leading-relaxed';
+        bodyDiv.innerHTML = renderMd(note.content);
+
+        card.appendChild(timeP);
+        card.appendChild(bodyDiv);
+        cardsDiv.appendChild(card);
+      }
+
+      dateTag.appendChild(cardsDiv);
+      contentView.appendChild(dateTag);
+    }
+
+    // 加载更多按钮
+    if (hasMore) {
+      loadMoreWrap.classList.remove('hidden');
+    } else {
+      loadMoreWrap.classList.add('hidden');
+    }
+  }
+
+  /* ── 数据加载 ── */
+  function fetchNotes(append) {
+    if (!append) {
+      offset = 0;
+      allNotes = [];
+      loadingView.classList.remove('hidden');
+      contentView.classList.add('hidden');
+      emptyView.classList.add('hidden');
+    }
+
+    var url = '/api/notes?limit=' + LIMIT + '&offset=' + offset;
+    if (dateFilter.value) url += '&date=' + dateFilter.value;
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', url, true);
+    xhr.setRequestHeader('X-Token', token);
+    xhr.onload = function() {
+      if (xhr.status === 401) {
+        localStorage.removeItem('karvis_token');
+        location.href = '/web/login';
+        return;
+      }
+      try {
+        var d = JSON.parse(xhr.responseText);
+        var notes = d.notes || [];
+        if (append) {
+          for (var i = 0; i < notes.length; i++) allNotes.push(notes[i]);
+        } else {
+          allNotes = notes;
+        }
+        hasMore = d.has_more;
+        offset = allNotes.length;
+      } catch(e) {
+        console.error('JSON parse error:', e);
+      }
+      loadingView.classList.add('hidden');
+      render();
+    };
+    xhr.onerror = function() {
+      console.error('Network error');
+      loadingView.classList.add('hidden');
+      render();
+    };
+    xhr.send();
+  }
+
+  /* ── 事件绑定 ── */
+  dateFilter.addEventListener('change', function() {
+    clearBtn.classList.toggle('hidden', !dateFilter.value);
+    fetchNotes(false);
+  });
+
+  clearBtn.addEventListener('click', function() {
+    dateFilter.value = '';
+    clearBtn.classList.add('hidden');
+    fetchNotes(false);
+  });
+
+  loadMoreBtn.addEventListener('click', function() {
+    fetchNotes(true);
+  });
+
+  /* ── 首次加载 ── */
+  fetchNotes(false);
+
+})();
+</script>
 </body>
 </html>
