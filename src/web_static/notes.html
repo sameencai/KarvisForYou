@@ -5,17 +5,78 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Karvis · 速记</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <script>
 tailwind.config = { theme: { extend: { colors: {
   warm: { 50:'#fdf8f6',100:'#f2e8e5',200:'#eaddd7',300:'#e0cfc7',400:'#d2bab0',500:'#bfa094',600:'#a18072',700:'#977669',800:'#846358',900:'#43302b' }
 }}}}
 </script>
+<script>
+const API_HEADERS = () => ({'X-Token': localStorage.getItem('karvis_token')||''});
+function checkAuth() { if(!localStorage.getItem('karvis_token')) location.href='/web/login'; }
+
+function notesApp() {
+  return {
+    notes: [], grouped: [], loading: true, hasMore: false, offset: 0, dateFilter: '',
+    init() { this.load(); },
+    load() {
+      checkAuth(); this.offset = 0; this.loading = true;
+      let url = '/api/notes?limit=50&offset=0';
+      if (this.dateFilter) url += `&date=${this.dateFilter}`;
+      fetch(url, {headers: API_HEADERS()})
+        .then(r => {
+          if (r.status === 401) { localStorage.removeItem('karvis_token'); location.href='/web/login'; return null; }
+          return r.json();
+        })
+        .then(d => {
+          if (!d) return;
+          this.notes = d.notes || [];
+          this.hasMore = d.has_more;
+          this.offset = this.notes.length;
+          this.grouped = this.groupByDate(this.notes);
+          this.loading = false;
+        })
+        .catch(e => { console.error(e); this.loading = false; });
+    },
+    loadMore() {
+      let url = `/api/notes?limit=50&offset=${this.offset}`;
+      if (this.dateFilter) url += `&date=${this.dateFilter}`;
+      fetch(url, {headers: API_HEADERS()})
+        .then(r => r.json())
+        .then(d => {
+          this.notes.push(...(d.notes||[]));
+          this.hasMore = d.has_more;
+          this.offset = this.notes.length;
+          this.grouped = this.groupByDate(this.notes);
+        })
+        .catch(e => { console.error(e); });
+    },
+    groupByDate(notes) {
+      const map = {};
+      const order = [];
+      for (const n of notes) {
+        const d = n.time.slice(0, 10);
+        if (!map[d]) { map[d] = []; order.push(d); }
+        map[d].push(n);
+      }
+      return order.map(d => ({ date: d, items: map[d] }));
+    },
+    renderMd(text) {
+      if (!text) return '';
+      let s = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" class="text-blue-600 underline" target="_blank">$1</a>');
+      s = s.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" class="text-blue-600 underline break-all" target="_blank">$1</a>');
+      s = s.replace(/\n/g, '<br>');
+      return s;
+    }
+  }
+}
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <style>
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fdf8f6; }
 </style>
 </head>
-<body class="pb-20" x-data="notesApp()" x-init="load()">
+<body class="pb-20" x-data="notesApp()">
   <div class="bg-white border-b border-warm-100 px-4 py-3 flex items-center justify-between">
     <h1 class="text-lg font-bold text-warm-900">📝 速记</h1>
     <div class="flex items-center gap-2">
@@ -61,60 +122,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     <a href="/web/archive" class="flex flex-col items-center text-warm-400"><span class="text-lg">📁</span>笔记</a>
   </nav>
 
-<script>
-const API_HEADERS = () => ({'X-Token': localStorage.getItem('karvis_token')||''});
-function checkAuth() { if(!localStorage.getItem('karvis_token')) location.href='/web/login'; }
 
-function notesApp() {
-  return {
-    notes: [], grouped: [], loading: true, hasMore: false, offset: 0, dateFilter: '',
-    async load() {
-      checkAuth(); this.offset = 0; this.loading = true;
-      let url = '/api/notes?limit=50&offset=0';
-      if (this.dateFilter) url += `&date=${this.dateFilter}`;
-      try {
-        const r = await fetch(url, {headers: API_HEADERS()});
-        if (r.status === 401) { localStorage.removeItem('karvis_token'); location.href='/web/login'; return; }
-        const d = await r.json();
-        this.notes = d.notes || [];
-        this.hasMore = d.has_more;
-        this.offset = this.notes.length;
-        this.grouped = this.groupByDate(this.notes);
-      } catch(e) { console.error(e); }
-      this.loading = false;
-    },
-    async loadMore() {
-      let url = `/api/notes?limit=50&offset=${this.offset}`;
-      if (this.dateFilter) url += `&date=${this.dateFilter}`;
-      try {
-        const r = await fetch(url, {headers: API_HEADERS()});
-        const d = await r.json();
-        this.notes.push(...(d.notes||[]));
-        this.hasMore = d.has_more;
-        this.offset = this.notes.length;
-        this.grouped = this.groupByDate(this.notes);
-      } catch(e) { console.error(e); }
-    },
-    groupByDate(notes) {
-      const map = {};
-      const order = [];
-      for (const n of notes) {
-        const d = n.time.slice(0, 10);
-        if (!map[d]) { map[d] = []; order.push(d); }
-        map[d].push(n);
-      }
-      return order.map(d => ({ date: d, items: map[d] }));
-    },
-    renderMd(text) {
-      if (!text) return '';
-      let s = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" class="text-blue-600 underline" target="_blank">$1</a>');
-      s = s.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" class="text-blue-600 underline break-all" target="_blank">$1</a>');
-      s = s.replace(/\n/g, '<br>');
-      return s;
-    }
-  }
-}
-</script>
 </body>
 </html>
