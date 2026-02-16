@@ -25,7 +25,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
   </div>
 
   <div class="p-4 space-y-3" x-show="!loading">
-    <template x-for="note in notes" :key="note.time">
+    <template x-for="(note, idx) in notes" :key="idx">
       <div class="bg-white rounded-xl p-4 shadow-sm">
         <p class="text-xs text-warm-400 mb-1" x-text="note.time"></p>
         <div class="text-sm text-warm-800 prose prose-sm" x-html="renderMd(note.content)"></div>
