@@ -12,44 +12,47 @@ tailwind.config = { theme: { extend: { colors: {
 }}}}
 </script>
 <style>
+[x-cloak] { display: none !important; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fdf8f6; }
 .prose img { max-width: 100%; border-radius: 0.5rem; }
 .prose p { margin: 0.25rem 0; }
 </style>
 </head>
 <body class="pb-20" x-data="notesApp()" x-init="load()">
-  <div class="bg-white border-b border-warm-100 px-4 py-3 flex items-center justify-between">
-    <h1 class="text-lg font-bold text-warm-900">📝 速记</h1>
+  <div class="bg-white border-b px-4 py-3 flex items-center justify-between" style="border-color:#f2e8e5">
+    <h1 class="text-lg font-bold" style="color:#43302b">📝 速记</h1>
     <input type="date" x-model="dateFilter" @change="load()"
-      class="text-sm border border-warm-200 rounded-lg px-2 py-1 text-warm-700">
+      class="text-sm rounded-lg px-2 py-1" style="border:1px solid #eaddd7;color:#977669">
   </div>
 
-  <div class="p-4 space-y-3" x-show="!loading">
+  <!-- 加载中 -->
+  <div x-cloak x-show="loading" class="flex items-center justify-center h-64">
+    <p style="color:#d2bab0">加载中...</p>
+  </div>
+
+  <!-- 内容区 -->
+  <div x-cloak x-show="!loading" class="p-4 space-y-3">
     <template x-for="(note, idx) in notes" :key="idx">
-      <div class="bg-white rounded-xl p-4 shadow-sm">
-        <p class="text-xs text-warm-400 mb-1" x-text="note.time"></p>
-        <div class="text-sm text-warm-800 prose prose-sm" x-html="renderMd(note.content)"></div>
+      <div class="bg-white rounded-xl p-4" style="box-shadow:0 1px 2px rgba(0,0,0,.05)">
+        <p class="text-xs mb-1" style="color:#d2bab0" x-text="note.time"></p>
+        <div class="text-sm" style="color:#846358" x-html="renderMd(note.content)"></div>
       </div>
     </template>
-    <p x-show="!notes.length" class="text-center text-warm-400 py-8">
+    <p x-show="!notes.length" class="text-center py-8" style="color:#d2bab0">
       <span x-text="dateFilter ? '这天没有速记' : '暂无速记'"></span>
     </p>
     <button x-show="hasMore" @click="loadMore()"
-      class="w-full py-2 text-sm text-warm-600 bg-white rounded-xl shadow-sm">
+      class="w-full py-2 text-sm bg-white rounded-xl" style="color:#a18072;box-shadow:0 1px 2px rgba(0,0,0,.05)">
       加载更多
     </button>
   </div>
 
-  <div x-show="loading" class="flex items-center justify-center h-64">
-    <p class="text-warm-400">加载中...</p>
-  </div>
-
-  <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-warm-100 flex justify-around py-2 text-xs">
-    <a href="/web/dashboard" class="flex flex-col items-center text-warm-400"><span class="text-lg">📊</span>概览</a>
-    <a href="/web/notes" class="flex flex-col items-center text-warm-700 font-medium"><span class="text-lg">📝</span>速记</a>
-    <a href="/web/todos" class="flex flex-col items-center text-warm-400"><span class="text-lg">✅</span>待办</a>
-    <a href="/web/daily" class="flex flex-col items-center text-warm-400"><span class="text-lg">📖</span>日记</a>
-    <a href="/web/archive" class="flex flex-col items-center text-warm-400"><span class="text-lg">📁</span>笔记</a>
+  <nav class="fixed bottom-0 left-0 right-0 bg-white flex justify-around py-2 text-xs" style="border-top:1px solid #f2e8e5">
+    <a href="/web/dashboard" class="flex flex-col items-center" style="color:#d2bab0"><span class="text-lg">📊</span>概览</a>
+    <a href="/web/notes" class="flex flex-col items-center font-medium" style="color:#977669"><span class="text-lg">📝</span>速记</a>
+    <a href="/web/todos" class="flex flex-col items-center" style="color:#d2bab0"><span class="text-lg">✅</span>待办</a>
+    <a href="/web/daily" class="flex flex-col items-center" style="color:#d2bab0"><span class="text-lg">📖</span>日记</a>
+    <a href="/web/archive" class="flex flex-col items-center" style="color:#d2bab0"><span class="text-lg">📁</span>笔记</a>
   </nav>
 
 <script>
@@ -86,10 +89,9 @@ function notesApp() {
     },
     renderMd(text) {
       if (!text) return '';
-      // 简易 Markdown：转义 HTML，处理链接和换行
       let s = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" class="text-blue-600 underline" target="_blank">$1</a>');
-      s = s.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" class="text-blue-600 underline break-all" target="_blank">$1</a>');
+      s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" style="color:#2563eb;text-decoration:underline" target="_blank">$1</a>');
+      s = s.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" style="color:#2563eb;text-decoration:underline;word-break:break-all" target="_blank">$1</a>');
       s = s.replace(/\n/g, '<br>');
       return s;
     }
