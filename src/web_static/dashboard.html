@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Karvis · 概览</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+tailwind.config = { theme: { extend: { colors: {
+  warm: { 50:'#fdf8f6',100:'#f2e8e5',200:'#eaddd7',300:'#e0cfc7',400:'#d2bab0',500:'#bfa094',600:'#a18072',700:'#977669',800:'#846358',900:'#43302b' }
+}}}}
+</script>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fdf8f6; }
+</style>
+</head>
+<body class="pb-20" x-data="dashApp()" x-init="load()">
+  <!-- 顶部 -->
+  <div class="bg-white border-b border-warm-100 px-4 py-4">
+    <h1 class="text-lg font-bold text-warm-900" x-text="greeting"></h1>
+    <p class="text-sm text-warm-500" x-text="dateStr"></p>
+  </div>
+
+  <div class="p-4 space-y-4" x-show="!loading">
+    <!-- 统计卡片行 -->
+    <div class="grid grid-cols-2 gap-3">
+      <div class="bg-white rounded-xl p-4 shadow-sm">
+        <p class="text-xs text-warm-500">今日速记</p>
+        <p class="text-2xl font-bold text-warm-800" x-text="data.note_count_today || 0"></p>
+      </div>
+      <div class="bg-white rounded-xl p-4 shadow-sm">
+        <p class="text-xs text-warm-500">待办进度</p>
+        <p class="text-2xl font-bold text-warm-800"><span x-text="data.todo_done||0"></span>/<span x-text="data.todo_total||0"></span></p>
+        <div class="mt-1 bg-warm-100 rounded-full h-1.5 overflow-hidden">
+          <div class="bg-warm-600 h-full rounded-full transition-all" :style="`width:${data.todo_total?Math.round(data.todo_done/data.todo_total*100):0}%`"></div>
+        </div>
+      </div>
+      <div class="bg-white rounded-xl p-4 shadow-sm">
+        <p class="text-xs text-warm-500">连续打卡</p>
+        <p class="text-2xl font-bold text-warm-800"><span x-text="data.streak||0"></span> <span class="text-sm font-normal">天</span></p>
+      </div>
+      <div class="bg-white rounded-xl p-4 shadow-sm">
+        <p class="text-xs text-warm-500">最新日记</p>
+        <p class="text-sm font-medium text-warm-700 truncate" x-text="data.latest_daily?.date || '暂无'"></p>
+      </div>
+    </div>
+
+    <!-- 情绪曲线 -->
+    <div class="bg-white rounded-xl p-4 shadow-sm" x-show="data.mood_chart && data.mood_chart.length">
+      <p class="text-sm font-medium text-warm-700 mb-3">近 7 天情绪</p>
+      <canvas id="moodChart" height="120"></canvas>
+    </div>
+
+    <!-- 最近速记 -->
+    <div class="bg-white rounded-xl p-4 shadow-sm" x-show="data.recent_notes && data.recent_notes.length">
+      <p class="text-sm font-medium text-warm-700 mb-3">最近速记</p>
+      <div class="space-y-2">
+        <template x-for="n in data.recent_notes" :key="n">
+          <p class="text-xs text-warm-600 border-l-2 border-warm-200 pl-2 line-clamp-2" x-text="n"></p>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <div x-show="loading" class="flex items-center justify-center h-64">
+    <p class="text-warm-400">加载中...</p>
+  </div>
+
+  <!-- 底部导航 -->
+  <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-warm-100 flex justify-around py-2 text-xs">
+    <a href="/web/dashboard" class="flex flex-col items-center text-warm-700 font-medium"><span class="text-lg">📊</span>概览</a>
+    <a href="/web/notes" class="flex flex-col items-center text-warm-400"><span class="text-lg">📝</span>速记</a>
+    <a href="/web/todos" class="flex flex-col items-center text-warm-400"><span class="text-lg">✅</span>待办</a>
+    <a href="/web/daily" class="flex flex-col items-center text-warm-400"><span class="text-lg">📖</span>日记</a>
+    <a href="/web/archive" class="flex flex-col items-center text-warm-400"><span class="text-lg">📁</span>笔记</a>
+  </nav>
+
+<script>
+const API_HEADERS = () => ({'X-Token': localStorage.getItem('karvis_token')||''});
+function checkAuth() { if(!localStorage.getItem('karvis_token')) location.href='/web/login'; }
+
+function dashApp() {
+  return {
+    data: {}, loading: true, greeting: '', dateStr: '',
+    async load() {
+      checkAuth();
+      const nn = localStorage.getItem('karvis_nickname') || '';
+      this.greeting = `Hi, ${nn || '你好'}！`;
+      const now = new Date();
+      const wd = ['周日','周一','周二','周三','周四','周五','周六'][now.getDay()];
+      this.dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${wd}`;
+      try {
+        const r = await fetch('/api/dashboard', {headers: API_HEADERS()});
+        if (r.status === 401) { localStorage.removeItem('karvis_token'); location.href='/web/login'; return; }
+        this.data = await r.json();
+        this.$nextTick(() => this.renderChart());
+      } catch(e) { console.error(e); }
+      this.loading = false;
+    },
+    renderChart() {
+      const mc = this.data.mood_chart || [];
+      if (!mc.length) return;
+      const ctx = document.getElementById('moodChart');
+      if (!ctx) return;
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: mc.map(s => s.date ? s.date.slice(5) : ''),
+          datasets: [{
+            data: mc.map(s => s.score),
+            borderColor: '#977669', backgroundColor: 'rgba(151,118,105,0.1)',
+            fill: true, tension: 0.4, pointRadius: 4, pointBackgroundColor: '#977669'
+          }]
+        },
+        options: {
+          plugins: { legend: { display: false } },
+          scales: { y: { min: 1, max: 10, ticks: { stepSize: 1 } } },
+          responsive: true, maintainAspectRatio: false
+        }
+      });
+    }
+  }
+}
+</script>
+</body>
+</html>

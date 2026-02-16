@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Karvis · 待办</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script>
+tailwind.config = { theme: { extend: { colors: {
+  warm: { 50:'#fdf8f6',100:'#f2e8e5',200:'#eaddd7',300:'#e0cfc7',400:'#d2bab0',500:'#bfa094',600:'#a18072',700:'#977669',800:'#846358',900:'#43302b' }
+}}}}
+</script>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fdf8f6; }
+</style>
+</head>
+<body class="pb-20" x-data="todoApp()" x-init="load()">
+  <div class="bg-white border-b border-warm-100 px-4 py-3 flex items-center justify-between">
+    <h1 class="text-lg font-bold text-warm-900">✅ 待办</h1>
+    <div class="flex gap-2 text-xs">
+      <button @click="filter='all'" :class="filter==='all'?'bg-warm-700 text-white':'bg-warm-100 text-warm-600'" class="px-3 py-1 rounded-full transition">全部</button>
+      <button @click="filter='pending'" :class="filter==='pending'?'bg-warm-700 text-white':'bg-warm-100 text-warm-600'" class="px-3 py-1 rounded-full transition">进行中</button>
+      <button @click="filter='done'" :class="filter==='done'?'bg-warm-700 text-white':'bg-warm-100 text-warm-600'" class="px-3 py-1 rounded-full transition">已完成</button>
+    </div>
+  </div>
+
+  <div class="p-4 space-y-2" x-show="!loading">
+    <!-- 进行中 -->
+    <template x-if="filter!=='done'">
+      <div>
+        <p class="text-xs text-warm-500 mb-2 font-medium" x-show="pending.length">
+          进行中 (<span x-text="pending.length"></span>)
+        </p>
+        <template x-for="(item,i) in pending" :key="'p'+i">
+          <div class="bg-white rounded-xl p-3 shadow-sm flex items-start gap-2">
+            <span class="text-warm-300 mt-0.5">⬜</span>
+            <p class="text-sm text-warm-800 flex-1" x-text="item.content"></p>
+          </div>
+        </template>
+      </div>
+    </template>
+    <!-- 已完成 -->
+    <template x-if="filter!=='pending'">
+      <div>
+        <p class="text-xs text-warm-500 mb-2 font-medium mt-4" x-show="done.length">
+          已完成 (<span x-text="done.length"></span>)
+        </p>
+        <template x-for="(item,i) in done" :key="'d'+i">
+          <div class="bg-white rounded-xl p-3 shadow-sm flex items-start gap-2 opacity-60">
+            <span class="text-green-500 mt-0.5">✅</span>
+            <p class="text-sm text-warm-600 flex-1 line-through" x-text="item.content"></p>
+          </div>
+        </template>
+      </div>
+    </template>
+    <p x-show="!pending.length && !done.length" class="text-center text-warm-400 py-8">暂无待办</p>
+  </div>
+
+  <div x-show="loading" class="flex items-center justify-center h-64">
+    <p class="text-warm-400">加载中...</p>
+  </div>
+
+  <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-warm-100 flex justify-around py-2 text-xs">
+    <a href="/web/dashboard" class="flex flex-col items-center text-warm-400"><span class="text-lg">📊</span>概览</a>
+    <a href="/web/notes" class="flex flex-col items-center text-warm-400"><span class="text-lg">📝</span>速记</a>
+    <a href="/web/todos" class="flex flex-col items-center text-warm-700 font-medium"><span class="text-lg">✅</span>待办</a>
+    <a href="/web/daily" class="flex flex-col items-center text-warm-400"><span class="text-lg">📖</span>日记</a>
+    <a href="/web/archive" class="flex flex-col items-center text-warm-400"><span class="text-lg">📁</span>笔记</a>
+  </nav>
+
+<script>
+const API_HEADERS = () => ({'X-Token': localStorage.getItem('karvis_token')||''});
+function checkAuth() { if(!localStorage.getItem('karvis_token')) location.href='/web/login'; }
+
+function todoApp() {
+  return {
+    pending: [], done: [], loading: true, filter: 'all',
+    async load() {
+      checkAuth();
+      try {
+        const r = await fetch('/api/todos', {headers: API_HEADERS()});
+        if (r.status === 401) { localStorage.removeItem('karvis_token'); location.href='/web/login'; return; }
+        const d = await r.json();
+        this.pending = d.pending || [];
+        this.done = d.done || [];
+      } catch(e) { console.error(e); }
+      this.loading = false;
+    }
+  }
+}
+</script>
+</body>
+</html>

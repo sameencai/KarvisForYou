@@ -1,0 +1,4 @@
+#!/bin/bash
+cd /var/user
+export PYTHONPATH=/var/user:$PYTHONPATH
+/var/lang/python39/bin/python3 app.py 2>&1

@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  karvis:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: karvis
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    volumes:
+      # 持久化多用户数据（用户目录 + 系统数据 + 令牌 + 用量日志）
+      - karvis_data:/app/data
+    env_file:
+      - ../src/.env
+    environment:
+      - DATA_DIR=/app/data
+      - PROCESS_ENDPOINT_URL=http://127.0.0.1:9000/process
+
+volumes:
+  karvis_data:

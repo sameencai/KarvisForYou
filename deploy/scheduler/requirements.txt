@@ -1,0 +1,7 @@
+# karvis-scheduler 依赖
+# 指定兼容腾讯云函数的版本
+urllib3==1.26.18
+requests==2.31.0
+certifi
+charset-normalizer
+idna

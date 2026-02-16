@@ -1,0 +1,100 @@
+# serverless.yml - Karvis 定时调度器配置
+# 部署到腾讯云 SCF 时使用（需安装 Serverless Framework）
+
+component: scf
+name: karvis-scheduler
+app: karvis-scheduler
+
+inputs:
+  name: karvis-scheduler
+  region: ap-guangzhou          # 改为你的 SCF 区域
+  runtime: Python3.9
+  handler: index.main_handler
+  memorySize: 64
+  timeout: 120
+
+  environment:
+    variables:
+      TZ: Asia/Shanghai
+      KARVIS_SYSTEM_URL: https://your-scf-url.tencentscf.com/system   # 改为你的 Karvis 公网 URL
+
+  events:
+    # 缓存刷新 - 每30分钟
+    - timer:
+        name: refresh-cache
+        parameters:
+          cronExpression: "0 */30 * * * ? *"
+          enable: true
+          argument: '{"action":"refresh_cache"}'
+
+    # 晨报推送 - 每天 8:00
+    - timer:
+        name: morning-report
+        parameters:
+          cronExpression: "0 0 8 * * ? *"
+          enable: true
+          argument: '{"action":"morning_report"}'
+
+    # 晚间打卡 - 每天 21:00
+    - timer:
+        name: evening-checkin
+        parameters:
+          cronExpression: "0 0 21 * * ? *"
+          enable: true
+          argument: '{"action":"evening_checkin"}'
+
+    # 待办提醒 - 每天 9:00, 14:00, 18:00
+    - timer:
+        name: todo-remind
+        parameters:
+          cronExpression: "0 0 9,14,18 * * ? *"
+          enable: true
+          argument: '{"action":"todo_remind"}'
+
+    # 日报生成 - 每天 22:30（打卡之后）
+    - timer:
+        name: daily-report
+        parameters:
+          cronExpression: "0 30 22 * * ? *"
+          enable: true
+          argument: '{"action":"daily_report"}'
+
+    # F1: 情绪日记 - 每天 22:00
+    - timer:
+        name: mood-generate
+        parameters:
+          cronExpression: "0 0 22 * * ? *"
+          enable: true
+          argument: '{"action":"mood_generate"}'
+
+    # F4: 周回顾 - 每周日 21:30
+    - timer:
+        name: weekly-review
+        parameters:
+          cronExpression: "0 30 21 ? * 1 *"
+          enable: true
+          argument: '{"action":"weekly_review"}'
+
+    # F5: 轻推检测 - 每天 14:00（沉默检测+情绪跟进）
+    - timer:
+        name: nudge-check
+        parameters:
+          cronExpression: "0 0 14 * * ? *"
+          enable: true
+          argument: '{"action":"nudge_check"}'
+
+    # F2: 智能陪伴检查 - 8-23点每2小时（有事才发，没事静默）
+    - timer:
+        name: companion-check
+        parameters:
+          cronExpression: "0 0 8-23/2 * * ? *"
+          enable: true
+          argument: '{"action":"companion_check"}'
+
+    # F6: 月度回顾 - 每月最后一天 22:00
+    - timer:
+        name: monthly-review
+        parameters:
+          cronExpression: "0 0 22 L * ? *"
+          enable: true
+          argument: '{"action":"monthly_review"}'

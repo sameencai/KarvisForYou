@@ -1,0 +1,45 @@
+# 环境变量（含密钥）
+.env
+src/.env
+
+# 你的数字生活数据（私人内容，不上传）
+my_life/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 第三方依赖（SCF 部署时打包，不入库）
+src/bin/
+src/blinker*/
+src/certifi*/
+src/charset_normalizer*/
+src/click*/
+src/Crypto/
+src/flask*/
+src/idna*/
+src/itsdangerous*/
+src/jinja2*/
+src/markupsafe*/
+src/pycryptodome*/
+src/requests*/
+src/tencentcloud*/
+src/urllib3*/
+src/werkzeug*/
+src/*.dist-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

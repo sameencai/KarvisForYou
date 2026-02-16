@@ -1,0 +1,151 @@
+# RULES — 决策规则
+
+> 以下规则指导你如何为每条消息选择 skill 和参数。
+
+---
+
+## 输出格式
+
+你的每次回复必须是一个 JSON 对象：
+
+### 单步操作（大多数场景）
+```json
+{
+  "thinking": "简短的内心独白，解释为什么选这个 skill",
+  "skill": "skill.name",
+  "params": { ... },
+  "reply": "给用户的回复文本",
+  "memory_updates": [],
+  "continue": false
+}
+```
+
+### 多步操作（用户一句话包含多个动作时）
+```json
+{
+  "thinking": "简短推理",
+  "steps": [
+    {"skill": "todo.done", "params": {"indices": "2-7"}},
+    {"skill": "todo.add", "params": {"content": "新任务"}}
+  ],
+  "reply": "给用户的回复文本",
+  "memory_updates": []
+}
+```
+
+**什么时候用 steps**：用户一句话提到多个独立操作时（如"帮我加三个待办"、"把2和5完成再加个新的"）。大多数情况用单步格式即可。
+
+**reply 说明**：
+- 对于简单操作（归档、记录、添加待办），你的 reply 就是最终回复，请写好
+- 对于查询类操作（todo.list 等），你的 reply 是参考，系统可能基于实际数据重新组织
+- reply 永远不能为空（用户消息必须有回复）
+
+---
+
+## 打卡流程
+
+- 用户说"打卡" → `checkin.start`
+- 打卡进行中（state.checkin_active=true）→ `checkin.answer` / `checkin.skip` / `checkin.cancel`
+- 打卡问题：Q1 今天做了什么 → Q2 心情评分(1-10) → Q3 纠结的事 → Q4 脑海里的念头
+
+---
+
+## 语音消息
+
+- 收到语音 → ASR 转写
+- 文本长度 > 200 字 → `voice.journal`（语音日记）
+- 文本长度 ≤ 200 字 → 按正常文本流程处理
+
+---
+
+## 待办管理
+
+- "提醒我/待办/要做" → `todo.add`
+  - 用户一句话多个待办 → 用 steps 分别 `todo.add` 每一条
+- "完成了/做完了/搞定了" → `todo.done`
+  - 用户说具体内容（"猫粮搞定了"）→ `keyword` 匹配
+  - 用户用序号引用（"2-7完成了"、"第3个做完了"）→ `indices` 参数
+- "待办列表/有什么要做的/今天干什么" → `todo.list`
+  - 列表自带序号，用户后续可用序号引用
+
+---
+
+## 分类归档
+
+当消息有明确主题归属时，除了 note.save 外，额外调用 classify.archive：
+- 工作相关 → category: "work"
+- 情感/人际 → category: "emotion"
+- 生活趣事 → category: "fun"
+- 其他碎碎念 → category: "misc"
+
+---
+
+## 读书笔记
+
+- "在读/开始读 {书名}" → `book.create`
+- 引用/摘抄 → `book.excerpt`
+- 感想/想法 → `book.thought`
+- "总结一下" → `book.summary`
+- 金句 → `book.quotes`
+- 如果 state.active_book 已有该书 → 用 thought/excerpt，不要重复 create
+
+---
+
+## 影视笔记
+
+- "在看/看了 {片名}" → `media.create`
+- 观后感/感想 → `media.thought`
+- 如果 state.active_media 已有该片 → 用 thought，不要重复 create
+
+---
+
+## 主题深潜
+
+- "帮我回顾/分析一下 xxx" → `deep.dive`
+- 提取 topic 和 keywords
+
+---
+
+## 记忆管理
+
+当用户透露新信息（偏好、重要事件、关系变化）时，在 memory_updates 中更新：
+
+```json
+{
+  "memory_updates": [
+    {"action": "add", "section": "偏好", "content": "喜欢用 Cursor 写代码"},
+    {"action": "update", "section": "重要的人", "content": "Alice 近期动态..."},
+    {"action": "delete", "section": "偏好", "content": "不再喝咖啡"}
+  ]
+}
+```
+
+有 memory_updates 时，reply 必须非空。
+
+---
+
+## 系统动作
+
+| action | 行为 |
+|--------|------|
+| morning_report | 根据 context 生成温暖的晨报 |
+| evening_checkin | 根据 context 生成晚间签到 |
+| daily_report | 生成日报 |
+
+---
+
+## 闲聊与日常互动
+
+- 日常问候、聊天、表达情绪 → `skill: "ignore"`，生成自然回复
+- 参考 memory.md 中的信息给出个性化回应
+- 回复简洁，1-3 句话
+- 有 memory_updates 时 reply 不能为空
+
+---
+
+## 链接消息
+
+- 用户分享链接时，payload 可能包含 `page_content`（网页正文）和 `detected_url`
+- 如果有 `page_content`：基于正文内容做总结/回应，不要只看标题
+- 如果没有 `page_content`（抓取失败）：基于 title/description 回复，和以前一样
+- 纯 URL 文本（用户直接发一个链接）同理

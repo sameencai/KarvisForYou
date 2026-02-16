@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Karvis · 笔记</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+tailwind.config = { theme: { extend: { colors: {
+  warm: { 50:'#fdf8f6',100:'#f2e8e5',200:'#eaddd7',300:'#e0cfc7',400:'#d2bab0',500:'#bfa094',600:'#a18072',700:'#977669',800:'#846358',900:'#43302b' }
+}}}}
+</script>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fdf8f6; }
+.md-content h1,.md-content h2,.md-content h3 { font-weight: 700; margin: 0.8em 0 0.4em; }
+.md-content h1 { font-size: 1.25rem; }
+.md-content p { margin: 0.3em 0; }
+.md-content ul,.md-content ol { padding-left: 1.2em; }
+.md-content blockquote { border-left: 3px solid #d2bab0; padding-left: 0.8em; color: #846358; }
+</style>
+</head>
+<body class="pb-20" x-data="archiveApp()" x-init="load()">
+  <div class="bg-white border-b border-warm-100 px-4 py-3 flex items-center justify-between">
+    <button x-show="detail" @click="detail=null" class="text-warm-600 text-sm">← 返回</button>
+    <h1 class="text-lg font-bold text-warm-900" x-show="!detail">📁 笔记</h1>
+    <div class="flex gap-1 text-xs overflow-x-auto" x-show="!detail">
+      <template x-for="c in cats" :key="c.key">
+        <button @click="cat=c.key;load()" :class="cat===c.key?'bg-warm-700 text-white':'bg-warm-100 text-warm-600'"
+          class="px-2 py-1 rounded-full transition whitespace-nowrap" x-text="c.label"></button>
+      </template>
+    </div>
+  </div>
+
+  <div class="p-4 space-y-2" x-show="!loading && !detail">
+    <template x-for="n in notes" :key="n.file">
+      <div @click="openDetail(n)" class="bg-white rounded-xl p-4 shadow-sm cursor-pointer hover:shadow-md transition">
+        <p class="text-sm font-medium text-warm-800" x-text="n.title"></p>
+        <div class="flex items-center gap-2 mt-1">
+          <span class="text-xs text-warm-400" x-text="n.date"></span>
+          <span class="text-xs px-2 py-0.5 bg-warm-50 text-warm-600 rounded-full" x-text="catLabel(n.category)"></span>
+        </div>
+      </div>
+    </template>
+    <p x-show="!notes.length" class="text-center text-warm-400 py-8">暂无笔记</p>
+  </div>
+
+  <div class="p-4" x-show="detail">
+    <div class="bg-white rounded-xl p-5 shadow-sm">
+      <h2 class="text-lg font-bold text-warm-900 mb-3" x-text="detail?.title"></h2>
+      <div class="md-content text-sm text-warm-800 leading-relaxed" x-html="detailHtml"></div>
+    </div>
+  </div>
+
+  <div x-show="loading" class="flex items-center justify-center h-64">
+    <p class="text-warm-400">加载中...</p>
+  </div>
+
+  <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-warm-100 flex justify-around py-2 text-xs">
+    <a href="/web/dashboard" class="flex flex-col items-center text-warm-400"><span class="text-lg">📊</span>概览</a>
+    <a href="/web/notes" class="flex flex-col items-center text-warm-400"><span class="text-lg">📝</span>速记</a>
+    <a href="/web/todos" class="flex flex-col items-center text-warm-400"><span class="text-lg">✅</span>待办</a>
+    <a href="/web/daily" class="flex flex-col items-center text-warm-400"><span class="text-lg">📖</span>日记</a>
+    <a href="/web/archive" class="flex flex-col items-center text-warm-700 font-medium"><span class="text-lg">📁</span>笔记</a>
+  </nav>
+
+<script>
+const API_HEADERS = () => ({'X-Token': localStorage.getItem('karvis_token')||''});
+function checkAuth() { if(!localStorage.getItem('karvis_token')) location.href='/web/login'; }
+
+function archiveApp() {
+  return {
+    notes: [], loading: true, cat: '',
+    detail: null, detailHtml: '',
+    cats: [
+      {key:'',label:'全部'},{key:'work',label:'工作'},{key:'emotion',label:'情感'},
+      {key:'fun',label:'生活'},{key:'book',label:'读书'},{key:'media',label:'影视'},
+      {key:'voice',label:'语音'}
+    ],
+    catLabel(c) { return {work:'工作',emotion:'情感',fun:'生活',book:'读书',media:'影视',voice:'语音'}[c]||c; },
+    async load() {
+      checkAuth(); this.loading = true;
+      let url = '/api/archive';
+      if (this.cat) url += `?category=${this.cat}`;
+      try {
+        const r = await fetch(url, {headers: API_HEADERS()});
+        if (r.status === 401) { localStorage.removeItem('karvis_token'); location.href='/web/login'; return; }
+        this.notes = (await r.json()).notes || [];
+      } catch(e) { console.error(e); }
+      this.loading = false;
+    },
+    async openDetail(note) {
+      try {
+        const r = await fetch(`/api/archive/${encodeURIComponent(note.file)}?category=${note.category}`, {headers: API_HEADERS()});
+        const d = await r.json();
+        this.detail = note;
+        this.detailHtml = marked.parse(d.content || '');
+      } catch(e) { console.error(e); }
+    }
+  }
+}
+</script>
+</body>
+</html>

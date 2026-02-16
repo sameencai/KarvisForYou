@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Karvis · 速记</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+tailwind.config = { theme: { extend: { colors: {
+  warm: { 50:'#fdf8f6',100:'#f2e8e5',200:'#eaddd7',300:'#e0cfc7',400:'#d2bab0',500:'#bfa094',600:'#a18072',700:'#977669',800:'#846358',900:'#43302b' }
+}}}}
+</script>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fdf8f6; }
+.prose img { max-width: 100%; border-radius: 0.5rem; }
+.prose p { margin: 0.25rem 0; }
+</style>
+</head>
+<body class="pb-20" x-data="notesApp()" x-init="load()">
+  <div class="bg-white border-b border-warm-100 px-4 py-3 flex items-center justify-between">
+    <h1 class="text-lg font-bold text-warm-900">📝 速记</h1>
+    <input type="date" x-model="dateFilter" @change="load()"
+      class="text-sm border border-warm-200 rounded-lg px-2 py-1 text-warm-700">
+  </div>
+
+  <div class="p-4 space-y-3" x-show="!loading">
+    <template x-for="note in notes" :key="note.time">
+      <div class="bg-white rounded-xl p-4 shadow-sm">
+        <p class="text-xs text-warm-400 mb-1" x-text="note.time"></p>
+        <div class="text-sm text-warm-800 prose prose-sm" x-html="renderMd(note.content)"></div>
+      </div>
+    </template>
+    <p x-show="!notes.length" class="text-center text-warm-400 py-8">
+      <span x-text="dateFilter ? '这天没有速记' : '暂无速记'"></span>
+    </p>
+    <button x-show="hasMore" @click="loadMore()"
+      class="w-full py-2 text-sm text-warm-600 bg-white rounded-xl shadow-sm">
+      加载更多
+    </button>
+  </div>
+
+  <div x-show="loading" class="flex items-center justify-center h-64">
+    <p class="text-warm-400">加载中...</p>
+  </div>
+
+  <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-warm-100 flex justify-around py-2 text-xs">
+    <a href="/web/dashboard" class="flex flex-col items-center text-warm-400"><span class="text-lg">📊</span>概览</a>
+    <a href="/web/notes" class="flex flex-col items-center text-warm-700 font-medium"><span class="text-lg">📝</span>速记</a>
+    <a href="/web/todos" class="flex flex-col items-center text-warm-400"><span class="text-lg">✅</span>待办</a>
+    <a href="/web/daily" class="flex flex-col items-center text-warm-400"><span class="text-lg">📖</span>日记</a>
+    <a href="/web/archive" class="flex flex-col items-center text-warm-400"><span class="text-lg">📁</span>笔记</a>
+  </nav>
+
+<script>
+const API_HEADERS = () => ({'X-Token': localStorage.getItem('karvis_token')||''});
+function checkAuth() { if(!localStorage.getItem('karvis_token')) location.href='/web/login'; }
+
+function notesApp() {
+  return {
+    notes: [], loading: true, hasMore: false, offset: 0, dateFilter: '',
+    async load() {
+      checkAuth(); this.offset = 0; this.loading = true;
+      let url = '/api/notes?limit=30&offset=0';
+      if (this.dateFilter) url += `&date=${this.dateFilter}`;
+      try {
+        const r = await fetch(url, {headers: API_HEADERS()});
+        if (r.status === 401) { localStorage.removeItem('karvis_token'); location.href='/web/login'; return; }
+        const d = await r.json();
+        this.notes = d.notes || [];
+        this.hasMore = d.has_more;
+        this.offset = this.notes.length;
+      } catch(e) { console.error(e); }
+      this.loading = false;
+    },
+    async loadMore() {
+      let url = `/api/notes?limit=30&offset=${this.offset}`;
+      if (this.dateFilter) url += `&date=${this.dateFilter}`;
+      try {
+        const r = await fetch(url, {headers: API_HEADERS()});
+        const d = await r.json();
+        this.notes.push(...(d.notes||[]));
+        this.hasMore = d.has_more;
+        this.offset = this.notes.length;
+      } catch(e) { console.error(e); }
+    },
+    renderMd(text) { return text ? marked.parse(text) : ''; }
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "users": {
+    "CaiWenWen": {
+      "created_at": "2026-02-16T10:42:03+08:00",
+      "last_active": "2026-02-16T10:48:40+08:00",
+      "nickname": "",
+      "status": "active",
+      "message_count_today": 4,
+      "message_count_date": "2026-02-16",
+      "total_messages": 4
+    },
+    "KongKongd": {
+      "created_at": "2026-02-16T10:48:40+08:00",
+      "last_active": "2026-02-16T10:48:40+08:00",
+      "nickname": "",
+      "status": "active",
+      "message_count_today": 1,
+      "message_count_date": "2026-02-16",
+      "total_messages": 1
+    }
+  }
+}

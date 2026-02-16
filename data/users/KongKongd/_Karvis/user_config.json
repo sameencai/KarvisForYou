@@ -1,0 +1,10 @@
+{
+  "nickname": "",
+  "soul_override": "",
+  "info": {},
+  "preferences": {
+    "morning_report": true,
+    "evening_checkin": true,
+    "companion_enabled": true
+  }
+}

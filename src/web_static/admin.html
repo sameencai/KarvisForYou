@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Karvis · 管理员</title>
+<script src="https://cdn.tailwindcss.com/3.4.1"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.3/dist/cdn.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+tailwind.config = { theme: { extend: { colors: {
+  warm: { 50:'#fdf8f6',100:'#f2e8e5',200:'#eaddd7',300:'#e0cfc7',400:'#d2bab0',500:'#bfa094',600:'#a18072',700:'#977669',800:'#846358',900:'#43302b' }
+}}}}
+</script>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fdf8f6; }
+[x-cloak] { display: none !important; }
+</style>
+</head>
+<body class="p-4" x-data="adminApp()" x-init="init()">
+  <!-- 登录 -->
+  <div x-show="!authed" class="max-w-sm mx-auto mt-20 bg-white rounded-2xl shadow-lg p-8">
+    <h1 class="text-xl font-bold text-center mb-6" style="color:#43302b">🔐 管理员面板</h1>
+    <input type="password" x-model="adminToken" @keydown.enter="login()" placeholder="输入管理员密钥"
+      class="w-full px-4 py-3 border rounded-xl mb-3 outline-none" style="border-color:#eaddd7">
+    <button @click="login()" class="w-full py-3 text-white rounded-xl font-medium transition" style="background:#977669">
+      进入
+    </button>
+    <p x-show="authError" class="text-red-500 text-sm text-center mt-2" x-text="authError"></p>
+  </div>
+
+  <!-- 主内容 -->
+  <div x-show="authed" x-cloak class="max-w-4xl mx-auto space-y-6">
+    <div class="flex items-center justify-between">
+      <h1 class="text-xl font-bold text-warm-900">🔐 Karvis 管理面板</h1>
+      <button @click="authed=false;adminToken='';localStorage.removeItem('karvis_admin_token')" class="text-sm text-warm-500">退出</button>
+    </div>
+
+    <!-- 用量统计 -->
+    <div class="bg-white rounded-xl p-5 shadow-sm">
+      <h2 class="text-base font-bold text-warm-800 mb-4">📊 LLM 用量统计</h2>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <div class="bg-warm-50 rounded-lg p-3">
+          <p class="text-xs text-warm-500">总 Token</p>
+          <p class="text-lg font-bold text-warm-800" x-text="formatNum(usage.total_tokens||0)"></p>
+        </div>
+        <div class="bg-warm-50 rounded-lg p-3">
+          <p class="text-xs text-warm-500">总调用</p>
+          <p class="text-lg font-bold text-warm-800" x-text="usage.total_calls||0"></p>
+        </div>
+        <div class="bg-warm-50 rounded-lg p-3">
+          <p class="text-xs text-warm-500">估算成本</p>
+          <p class="text-lg font-bold text-warm-800" x-text="estimateCost()"></p>
+        </div>
+        <div class="bg-warm-50 rounded-lg p-3">
+          <p class="text-xs text-warm-500">活跃天数</p>
+          <p class="text-lg font-bold text-warm-800" x-text="Object.keys(usage.daily||{}).length"></p>
+        </div>
+      </div>
+      <div x-show="chartReady" style="height:160px"><canvas id="usageChart"></canvas></div>
+      <p x-show="!chartReady" class="text-xs text-warm-400 text-center py-4">图表加载中（如长时间无显示可忽略）</p>
+    </div>
+
+    <!-- 用户列表 -->
+    <div class="bg-white rounded-xl p-5 shadow-sm">
+      <h2 class="text-base font-bold text-warm-800 mb-4">👥 用户列表</h2>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-warm-100 text-warm-500 text-left">
+              <th class="py-2 px-2">用户 ID</th>
+              <th class="py-2 px-2">昵称</th>
+              <th class="py-2 px-2">注册时间</th>
+              <th class="py-2 px-2">最后活跃</th>
+              <th class="py-2 px-2">今日消息</th>
+              <th class="py-2 px-2">总消息</th>
+              <th class="py-2 px-2">Token 用量</th>
+              <th class="py-2 px-2">状态</th>
+              <th class="py-2 px-2">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="(u, uid) in users" :key="uid">
+              <tr class="border-b border-warm-50">
+                <td class="py-2 px-2 font-mono text-xs" x-text="uid"></td>
+                <td class="py-2 px-2" x-text="u.nickname||'-'"></td>
+                <td class="py-2 px-2 text-xs" x-text="(u.created_at||'').slice(0,10)"></td>
+                <td class="py-2 px-2 text-xs" x-text="(u.last_active||'').slice(0,16)"></td>
+                <td class="py-2 px-2" x-text="u.message_count_today||0"></td>
+                <td class="py-2 px-2" x-text="u.total_messages||0"></td>
+                <td class="py-2 px-2" x-text="formatNum(getUserTokens(uid))"></td>
+                <td class="py-2 px-2">
+                  <span :class="u.status==='active'?'text-green-600':'text-red-500'" x-text="u.status"></span>
+                </td>
+                <td class="py-2 px-2">
+                  <button x-show="u.status==='active'" @click="toggleStatus(uid,'suspend')"
+                    class="text-xs text-red-500 hover:underline">挂起</button>
+                  <button x-show="u.status!=='active'" @click="toggleStatus(uid,'activate')"
+                    class="text-xs text-green-600 hover:underline">激活</button>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 按用户用量详情 -->
+    <div class="bg-white rounded-xl p-5 shadow-sm">
+      <h2 class="text-base font-bold text-warm-800 mb-4">📈 按用户 Token 用量</h2>
+      <template x-for="(stats, uid) in usage.user_stats||{}" :key="uid">
+        <div class="mb-3 pb-3 border-b border-warm-50 last:border-0">
+          <div class="flex justify-between items-center">
+            <span class="text-sm font-medium text-warm-700" x-text="uid"></span>
+            <span class="text-sm text-warm-600" x-text="formatNum(stats.total_tokens) + ' tokens / ' + stats.call_count + ' 调用'"></span>
+          </div>
+          <div class="flex gap-2 mt-1 flex-wrap">
+            <template x-for="(mstats, model) in stats.models||{}" :key="model">
+              <span class="text-xs bg-warm-50 text-warm-600 px-2 py-0.5 rounded"
+                x-text="`${model}: ${formatNum(mstats.tokens)}`"></span>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- Alpine 加载前隐藏主内容 -->
+<script>
+function adminApp() {
+  return {
+    authed: false, adminToken: '', authError: '',
+    users: {}, usage: {}, chartReady: false,
+    async login() {
+      this.authError = '';
+      try {
+        const r = await fetch('/api/admin/users', { headers: {'X-Admin-Token': this.adminToken} });
+        if (r.status === 403) { this.authError = '密钥错误'; return; }
+        const d = await r.json();
+        this.users = d.users || {};
+        localStorage.setItem('karvis_admin_token', this.adminToken);
+        this.authed = true;
+        this.loadUsage();
+      } catch(e) { this.authError = '网络错误'; }
+    },
+    async init() {
+      const saved = localStorage.getItem('karvis_admin_token');
+      if (saved) { this.adminToken = saved; await this.login(); }
+    },
+    async loadUsage() {
+      try {
+        const r = await fetch('/api/admin/usage', { headers: {'X-Admin-Token': this.adminToken} });
+        this.usage = await r.json();
+        this.$nextTick(() => this.renderChart());
+      } catch(e) { console.error(e); }
+    },
+    getUserTokens(uid) {
+      return this.usage.user_stats?.[uid]?.total_tokens || 0;
+    },
+    formatNum(n) {
+      if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+      if (n >= 1000) return (n/1000).toFixed(1) + 'K';
+      return String(n);
+    },
+    estimateCost() {
+      const t = this.usage.total_tokens || 0;
+      const cost = t / 1000000 * 0.5;
+      return '¥' + (cost * 7).toFixed(2);
+    },
+    async toggleStatus(uid, action) {
+      try {
+        await fetch(`/api/admin/users/${uid}/${action}`, {
+          method: 'POST', headers: {'X-Admin-Token': this.adminToken}
+        });
+        const r = await fetch('/api/admin/users', { headers: {'X-Admin-Token': this.adminToken} });
+        this.users = (await r.json()).users || {};
+      } catch(e) { console.error(e); }
+    },
+    renderChart() {
+      if (typeof Chart === 'undefined') return;
+      const el = document.getElementById('usageChart');
+      if (!el) return;
+      const daily = this.usage.daily || {};
+      const dates = Object.keys(daily).sort().slice(-14);
+      if (!dates.length) return;
+      this.chartReady = true;
+      this.$nextTick(() => {
+        const el2 = document.getElementById('usageChart');
+        if (!el2) return;
+        new Chart(el2, {
+        type: 'bar',
+        data: {
+          labels: dates.map(d => d.slice(5)),
+          datasets: [{
+            label: 'Tokens',
+            data: dates.map(d => daily[d]?.tokens || 0),
+            backgroundColor: 'rgba(151,118,105,0.5)',
+            borderColor: '#977669', borderWidth: 1
+          }]
+        },
+        options: {
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true } },
+          responsive: true, maintainAspectRatio: false
+        }
+      });
+      });
+    }
+  }
+}
+</script>
+</body>
+</html>
