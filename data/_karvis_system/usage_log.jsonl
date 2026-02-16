@@ -1,3 +1,0 @@
-{"ts": "2026-02-16T10:42:11+08:00", "user_id": "CaiWenWen", "model_tier": "main", "model": "deepseek-v3.2", "prompt_tokens": 5673, "completion_tokens": 55, "total_tokens": 5728, "latency_s": 3.6}
-{"ts": "2026-02-16T10:44:27+08:00", "user_id": "CaiWenWen", "model_tier": "main", "model": "deepseek-v3.2", "prompt_tokens": 5714, "completion_tokens": 65, "total_tokens": 5779, "latency_s": 3.9}
-{"ts": "2026-02-16T10:45:36+08:00", "user_id": "CaiWenWen", "model_tier": "main", "model": "deepseek-v3.2", "prompt_tokens": 5898, "completion_tokens": 75, "total_tokens": 5973, "latency_s": 4.5}

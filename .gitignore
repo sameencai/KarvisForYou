@@ -2,8 +2,9 @@
 .env
 src/.env
 
-# 你的数字生活数据（私人内容，不上传）
+# 用户数据（私人内容，不上传）
 my_life/
+data/
 
 # Python
 __pycache__/
