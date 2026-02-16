@@ -626,7 +626,9 @@ def handle_message(msg, user_id):
             token = generate_token(user_id)
             import os as _os
             domain = _os.environ.get("WEB_DOMAIN", "127.0.0.1:9000")
-            scheme = "https" if "." in domain and "127.0.0.1" not in domain and "localhost" not in domain else "http"
+            # IP 地址用 http，有域名才用 https
+            _is_ip = all(part.isdigit() for part in domain.split(":")[0].split("."))
+            scheme = "http" if _is_ip or "127.0.0.1" in domain or "localhost" in domain else "https"
             web_url = f"{scheme}://{domain}/web/login?token={token}"
 
             final = (
