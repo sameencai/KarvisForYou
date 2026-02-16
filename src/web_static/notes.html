@@ -6,7 +6,6 @@
 <title>Karvis · 速记</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-<script async src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
 <script>
 tailwind.config = { theme: { extend: { colors: {
   warm: { 50:'#fdf8f6',100:'#f2e8e5',200:'#eaddd7',300:'#e0cfc7',400:'#d2bab0',500:'#bfa094',600:'#a18072',700:'#977669',800:'#846358',900:'#43302b' }
@@ -87,9 +86,12 @@ function notesApp() {
     },
     renderMd(text) {
       if (!text) return '';
-      if (typeof marked !== 'undefined' && marked.parse) return marked.parse(text);
-      // marked 未加载时简单转义换行
-      return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>');
+      // 简易 Markdown：转义 HTML，处理链接和换行
+      let s = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" class="text-blue-600 underline" target="_blank">$1</a>');
+      s = s.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" class="text-blue-600 underline break-all" target="_blank">$1</a>');
+      s = s.replace(/\n/g, '<br>');
+      return s;
     }
   }
 }
