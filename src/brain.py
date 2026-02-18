@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,
     QWEN_API_KEY, QWEN_BASE_URL, QWEN_MODEL, QWEN_VL_MODEL,
-    CHECKIN_TIMEOUT_SECONDS
+    CHECKIN_TIMEOUT_SECONDS, SCHEDULER_RHYTHM_WINDOW
 )
 from storage import IO as OneDriveIO  # 统一存储接口
 from memory import (
@@ -581,6 +581,12 @@ def process(payload, send_fn=None, ctx=None):
         except Exception as e:
             _log(f"[Brain] 先行发送失败: {e}")
 
+    # V8: 更新用户节奏画像（纯数据收集，不影响回复）
+    try:
+        _update_user_rhythm(state)
+    except Exception as e:
+        _log(f"[Brain][V8] 节奏更新失败（不影响主流程）: {e}")
+
     t_save_start = _time.time()
     _save_state_and_memory(state, decision, payload=payload, reply=reply, elapsed=t_save_start - t_start, ctx=ctx)
     t_end = _time.time()
@@ -765,7 +771,7 @@ _SIMPLE_SKILLS = frozenset({
     "settings.nickname", "settings.soul", "settings.info",
     "web.token",
     "habit.propose", "habit.nudge", "habit.status", "habit.complete",
-    "decision.record",
+    "decision.record", "dynamic",
 })
 
 
@@ -1111,3 +1117,142 @@ def _check_checkin_timeout(state):
             checkin_flow.finish(state, timeout=True)
     except Exception as e:
         _log(f"[Brain] 打卡超时检查异常: {e}")
+
+
+# ============ V8: 用户节奏学习 ============
+
+def _update_user_rhythm(state):
+    """V8: 从用户行为中学习作息节奏（每次消息后调用）
+
+    收集数据：
+    - 每小时活跃计数（hour_counts）
+    - 每日首条消息时间 → 滑动平均 avg_wake_time
+    - 每日末条消息时间 → 次日回看更新 avg_sleep_time
+    """
+    beijing_tz = timezone(timedelta(hours=8))
+    now = datetime.now(beijing_tz)
+    hour = now.hour
+    today_str = now.strftime("%Y-%m-%d")
+
+    sched = state.setdefault("scheduler", {})
+    rhythm = sched.setdefault("user_rhythm", {})
+
+    # 1. 更新活跃时段统计
+    hour_counts = rhythm.setdefault("hour_counts", {})
+    hour_str = str(hour)
+    hour_counts[hour_str] = hour_counts.get(hour_str, 0) + 1
+
+    # 2. 推算起床时间：今天第一条消息的时间
+    if rhythm.get("_last_wake_date") != today_str:
+        # 新一天的第一条消息 → 记录为今天的起床时间
+        # 先回看昨天的入睡时间
+        last_active = rhythm.get("_last_active_time")
+        last_active_date = rhythm.get("_last_active_date")
+        if last_active and last_active_date and last_active_date != today_str:
+            # 入睡时间只接受 20:00~04:00（次日凌晨），过滤异常值
+            try:
+                la_parts = last_active.split(":")
+                la_min = int(la_parts[0]) * 60 + int(la_parts[1])
+                if la_min >= 1200 or la_min < 240:  # 20:00+ 或 <04:00
+                    _update_avg_time(rhythm, "avg_sleep_time", last_active,
+                                     window=SCHEDULER_RHYTHM_WINDOW)
+            except (ValueError, IndexError):
+                pass
+
+        rhythm["_last_wake_date"] = today_str
+
+        # 起床时间只接受 05:00~12:00 的首条消息，过滤下午/晚上的异常值
+        if 5 <= hour <= 11:
+            rhythm["_today_wake"] = now.strftime("%H:%M")
+            _update_avg_time(rhythm, "avg_wake_time", now.strftime("%H:%M"),
+                             window=SCHEDULER_RHYTHM_WINDOW)
+        else:
+            _log(f"[Brain][V8] 今日首条消息在 {hour}:xx，不更新 wake_time")
+
+        # 周末偏移统计（同样只在合理时间窗口内更新）
+        if now.weekday() >= 5 and 5 <= hour <= 13:
+            _update_weekend_shift(rhythm, now.strftime("%H:%M"))
+
+    # 3. 记录最后活跃时间（下次新一天时用于推算入睡）
+    rhythm["_last_active_time"] = now.strftime("%H:%M")
+    rhythm["_last_active_date"] = today_str
+
+    _log(f"[Brain][V8] 节奏更新: hour={hour}, wake={rhythm.get('avg_wake_time', 'N/A')}, "
+         f"sleep={rhythm.get('avg_sleep_time', 'N/A')}")
+
+
+def _update_avg_time(rhythm, key, new_time_str, window=7):
+    """滑动平均更新时间（加权：新数据权重更高）
+
+    将时间转为分钟数进行加权平均，处理跨午夜场景。
+    """
+    samples_key = f"_{key}_samples"
+    samples = rhythm.setdefault(samples_key, [])
+    samples.append(new_time_str)
+    # 只保留最近 window 个样本
+    if len(samples) > window:
+        samples[:] = samples[-window:]
+
+    # 将所有样本转为分钟数并加权平均
+    minutes_list = []
+    for t in samples:
+        try:
+            parts = t.split(":")
+            m = int(parts[0]) * 60 + int(parts[1])
+            # wake_time 样本过滤：丢弃 12:00 之后的异常值（历史脏数据清洗）
+            if "wake" in key and m >= 720:
+                continue
+            minutes_list.append(m)
+        except (ValueError, IndexError):
+            continue
+
+    if not minutes_list:
+        return
+
+    # 处理跨午夜：如果是 sleep_time 且有 < 6:00 的数据，视为次日凌晨
+    if "sleep" in key:
+        adjusted = []
+        for m in minutes_list:
+            if m < 360:  # 6:00 之前视为次日凌晨
+                adjusted.append(m + 1440)
+            else:
+                adjusted.append(m)
+        minutes_list = adjusted
+
+    # 加权平均（越近的权重越高：1, 1.5, 2, 2.5, ...）
+    total_weight = 0
+    weighted_sum = 0
+    for i, m in enumerate(minutes_list):
+        w = 1 + i * 0.5
+        weighted_sum += m * w
+        total_weight += w
+
+    avg_minutes = int(weighted_sum / total_weight)
+
+    # 处理跨午夜回转
+    if avg_minutes >= 1440:
+        avg_minutes -= 1440
+
+    avg_h = avg_minutes // 60
+    avg_m = avg_minutes % 60
+    rhythm[key] = f"{avg_h:02d}:{avg_m:02d}"
+
+
+def _update_weekend_shift(rhythm, wake_time_str):
+    """更新周末晚起偏移量（与工作日 avg_wake_time 的差值）"""
+    avg_wake = rhythm.get("avg_wake_time")
+    if not avg_wake:
+        return
+
+    try:
+        wake_parts = wake_time_str.split(":")
+        wake_min = int(wake_parts[0]) * 60 + int(wake_parts[1])
+        avg_parts = avg_wake.split(":")
+        avg_min = int(avg_parts[0]) * 60 + int(avg_parts[1])
+        shift = wake_min - avg_min
+        if shift > 0:
+            # 简单滑动平均
+            old_shift = rhythm.get("weekend_shift", 60)
+            rhythm["weekend_shift"] = int(old_shift * 0.7 + shift * 0.3)
+    except (ValueError, IndexError):
+        pass

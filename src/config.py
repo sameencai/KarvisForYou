@@ -51,3 +51,15 @@ COMPANION_RECENT_HOURS = 2
 # ============ Web / 管理员 ============
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 WEB_TOKEN_EXPIRE_HOURS = int(os.environ.get("WEB_TOKEN_EXPIRE_HOURS", "24"))
+
+# ============ V8: 智能调度引擎 ============
+SCHEDULER_TICK_MINUTES = 30       # 心跳评估间隔（分钟）
+SCHEDULER_DEFAULT_WAKE = "08:00"  # 默认起床时间
+SCHEDULER_DEFAULT_SLEEP = "23:30" # 默认入睡时间
+SCHEDULER_WEEKEND_SHIFT = 60      # 周末平均晚起分钟数
+SCHEDULER_RHYTHM_WINDOW = 7       # 节奏学习滑动窗口（天）
+SCHEDULER_PUSH_MAX_DAILY = 6      # 每日所有主动推送总上限
+SCHEDULER_MIN_PUSH_GAP = 30       # 两次推送最小间隔（分钟）
+
+# ============ 服务端口 ============
+SERVER_PORT = int(os.environ.get("SERVER_PORT", "9000"))

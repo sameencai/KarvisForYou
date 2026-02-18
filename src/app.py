@@ -30,7 +30,10 @@ from config import (
     WEWORK_TOKEN, ENCODING_AES_KEY,
     TENCENT_APPID, TENCENT_SECRET_ID, TENCENT_SECRET_KEY,
     MSG_CACHE_EXPIRE_SECONDS,
-    WEATHER_API_KEY, WEATHER_CITY
+    WEATHER_API_KEY, WEATHER_CITY,
+    SCHEDULER_TICK_MINUTES, SCHEDULER_DEFAULT_WAKE, SCHEDULER_DEFAULT_SLEEP,
+    SCHEDULER_WEEKEND_SHIFT, SCHEDULER_PUSH_MAX_DAILY, SCHEDULER_MIN_PUSH_GAP,
+    SERVER_PORT,
 )
 from user_context import (
     get_or_create_user, get_all_active_users,
@@ -45,6 +48,14 @@ from storage import IO as OneDriveIO  # 统一存储接口（OneDrive 或 Lite �
 import brain
 
 app = Flask(__name__)
+
+# 过滤健康检查日志，避免 Nginx/Docker 的 GET / 刷屏
+import logging
+class _HealthCheckFilter(logging.Filter):
+    def filter(self, record):
+        msg = record.getMessage()
+        return '"GET / ' not in msg and '"GET /health' not in msg
+logging.getLogger('werkzeug').addFilter(_HealthCheckFilter())
 
 # 注册 Web 路由 Blueprint
 from web_routes import web_bp, api_bp
@@ -772,6 +783,23 @@ def system_endpoint():
             _log(f"[/system] 缓存已全部清除, 清理过期令牌 {removed} 个")
             return json.dumps({"ok": True, "action": "refresh_cache", "tokens_cleaned": removed})
 
+        # V8: 智能调度引擎（daily_init / scheduler_tick 遍历所有用户）
+        if action in ("daily_init", "scheduler_tick"):
+            user_ids = [target_user] if target_user else get_all_active_users()
+            results = []
+            for uid in user_ids:
+                try:
+                    ctx, _ = get_or_create_user(uid)
+                    if action == "daily_init":
+                        r = _daily_init(uid, ctx)
+                    else:
+                        r = _scheduler_tick(uid, ctx)
+                    results.append({"user_id": uid, **r})
+                except Exception as e:
+                    _log(f"[/system] V8 {action} 用户 {uid} 失败: {e}")
+                    results.append({"user_id": uid, "ok": False, "error": str(e)})
+            return json.dumps({"ok": True, "action": action, "results": results}, ensure_ascii=False)
+
         # 如果指定了 user_id，只处理该用户；否则遍历所有活跃用户
         if target_user:
             user_ids = [target_user]
@@ -1421,22 +1449,365 @@ def _build_weather_context():
     return {}
 
 
-# ============ 内置定时调度器（Lite 模式 / 本地运行） ============
+# ============ V8: 智能调度引擎 ============
+
+def _add_minutes(time_str, minutes):
+    """给 HH:MM 格式的时间加减分钟数，返回 HH:MM"""
+    try:
+        parts = time_str.split(":")
+        total = int(parts[0]) * 60 + int(parts[1]) + minutes
+        total = max(0, min(total, 1439))
+        return f"{total // 60:02d}:{total % 60:02d}"
+    except (ValueError, IndexError):
+        return time_str
+
+
+def _generate_daily_intents(state):
+    """V8: 基于用户节奏画像动态生成当天触达意图队列"""
+    sched = state.get("scheduler", {})
+    rhythm = sched.get("user_rhythm", {})
+    now = datetime.now(BEIJING_TZ)
+    is_weekend = now.weekday() >= 5
+
+    wake_time = rhythm.get("avg_wake_time", SCHEDULER_DEFAULT_WAKE)
+    sleep_time = rhythm.get("avg_sleep_time", SCHEDULER_DEFAULT_SLEEP)
+
+    if is_weekend:
+        shift = rhythm.get("weekend_shift", SCHEDULER_WEEKEND_SHIFT)
+        wake_time = _add_minutes(wake_time, shift)
+
+    intents = [
+        {
+            "type": "morning_report",
+            "earliest": wake_time,
+            "latest": _add_minutes(wake_time, 150),
+            "ideal": _add_minutes(wake_time, 30),
+            "priority": "normal",
+            "status": "pending"
+        },
+        {
+            "type": "todo_remind",
+            "earliest": _add_minutes(wake_time, 60),
+            "latest": "18:00",
+            "ideal": _add_minutes(wake_time, 90),
+            "priority": "normal",
+            "max_times": 2,
+            "sent_count": 0,
+            "status": "pending"
+        },
+        {
+            "type": "companion",
+            "earliest": _add_minutes(wake_time, 120),
+            "latest": _add_minutes(sleep_time, -60),
+            "ideal": None,
+            "priority": "low",
+            "max_times": 2,
+            "sent_count": 0,
+            "conditions": {"silent_hours": 4},
+            "status": "pending"
+        },
+        {
+            "type": "nudge_check",
+            "earliest": "13:00",
+            "latest": "15:00",
+            "ideal": "14:00",
+            "priority": "low",
+            "status": "pending"
+        },
+        {
+            "type": "evening_checkin",
+            "earliest": _add_minutes(sleep_time, -120),
+            "latest": _add_minutes(sleep_time, -30),
+            "ideal": _add_minutes(sleep_time, -90),
+            "priority": "normal",
+            "status": "pending"
+        },
+        {
+            "type": "daily_report",
+            "earliest": _add_minutes(sleep_time, -90),
+            "latest": _add_minutes(sleep_time, -15),
+            "ideal": _add_minutes(sleep_time, -60),
+            "priority": "normal",
+            "status": "pending"
+        },
+    ]
+
+    _log(f"[V8] 生成每日意图: wake={wake_time}, sleep={sleep_time}, "
+         f"weekend={is_weekend}, intents={len(intents)}")
+    return intents
+
+
+def _daily_init(uid, ctx):
+    """V8: 每日初始化（多用户版）— 生成当天意图队列 + 重置计数器"""
+    from memory import read_state_cached, write_state_and_update_cache
+    state = read_state_cached(ctx) or {}
+    sched = state.setdefault("scheduler", {})
+    now = datetime.now(BEIJING_TZ)
+    today_str = now.strftime("%Y-%m-%d")
+
+    if sched.get("_init_date") == today_str:
+        _log(f"[V8][{uid}] daily_init 今天已执行，跳过")
+        return {"skipped": True, "date": today_str}
+
+    intents = _generate_daily_intents(state)
+
+    # 过期意图标记 skipped（容器重启等场景）
+    now_min = now.hour * 60 + now.minute
+    for intent in intents:
+        latest = intent.get("latest", "23:59")
+        try:
+            latest_min = int(latest.split(":")[0]) * 60 + int(latest.split(":")[1])
+        except (ValueError, IndexError):
+            continue
+        if now_min > latest_min:
+            intent["status"] = "skipped"
+            intent["_skip_reason"] = f"初始化时已过期（now={now.strftime('%H:%M')} > latest={latest}）"
+            _log(f"[V8][{uid}] 意图 {intent['type']} 已过期，标记 skipped")
+
+    sched["intents"] = intents
+    sched["_init_date"] = today_str
+    sched["_push_count_today"] = 0
+    sched["_last_push_time"] = None
+
+    state["scheduler"] = sched
+    write_state_and_update_cache(state, ctx)
+
+    _log(f"[V8][{uid}] daily_init 完成: {len(intents)} 个意图已生成")
+    return {"date": today_str, "intents_count": len(intents)}
+
+
+def _scheduler_tick(uid, ctx):
+    """V8: 每 30 分钟心跳（多用户版）— 检查到期意图并执行"""
+    from memory import read_state_cached, write_state_and_update_cache
+    state = read_state_cached(ctx) or {}
+    sched = state.setdefault("scheduler", {})
+    now = datetime.now(BEIJING_TZ)
+    now_str = now.strftime("%H:%M")
+    today_str = now.strftime("%Y-%m-%d")
+
+    # 兜底初始化
+    if sched.get("_init_date") != today_str:
+        _log(f"[V8][{uid}] tick 检测到未初始化，触发 daily_init")
+        _daily_init(uid, ctx)
+        state = read_state_cached(ctx) or {}
+        sched = state.get("scheduler", {})
+
+    intents = sched.get("intents", [])
+    pending = [i for i in intents if i.get("status") == "pending"]
+
+    if not pending:
+        _log(f"[V8][{uid}] tick: 无 pending 意图")
+        return {"evaluated": 0, "executed": 0}
+
+    push_count = sched.get("_push_count_today", 0)
+    if push_count >= SCHEDULER_PUSH_MAX_DAILY:
+        _log(f"[V8][{uid}] tick: 今日推送已达上限 {push_count}/{SCHEDULER_PUSH_MAX_DAILY}")
+        return {"evaluated": len(pending), "executed": 0, "reason": "daily_limit"}
+
+    last_push = sched.get("_last_push_time")
+    if last_push:
+        try:
+            last_parts = last_push.split(":")
+            last_min = int(last_parts[0]) * 60 + int(last_parts[1])
+            now_min = now.hour * 60 + now.minute
+            if now_min - last_min < SCHEDULER_MIN_PUSH_GAP:
+                _log(f"[V8][{uid}] tick: 距上次推送不足 {SCHEDULER_MIN_PUSH_GAP} 分钟，跳过")
+                return {"evaluated": len(pending), "executed": 0, "reason": "min_gap"}
+        except (ValueError, IndexError):
+            pass
+
+    ready = []
+    for intent in pending:
+        action = _rule_evaluate(intent, state, now)
+        if action == "send":
+            ready.append(intent)
+        elif action == "skip":
+            intent["status"] = "skipped"
+            intent["_skip_reason"] = "rule_skip"
+
+    if not ready:
+        write_state_and_update_cache(state, ctx)
+        _log(f"[V8][{uid}] tick: 评估 {len(pending)} 个意图，无需执行")
+        return {"evaluated": len(pending), "executed": 0}
+
+    if len(ready) > 1:
+        ready = _try_merge_intents(ready)
+
+    executed = 0
+    for intent in ready:
+        if push_count + executed >= SCHEDULER_PUSH_MAX_DAILY:
+            break
+        try:
+            _execute_intent(intent, uid)
+            intent["status"] = "sent"
+            intent["_sent_at"] = now_str
+            executed += 1
+        except Exception as e:
+            _log(f"[V8][{uid}] 意图执行失败 {intent['type']}: {e}")
+            intent["_error"] = str(e)
+
+    sched["_push_count_today"] = push_count + executed
+    if executed > 0:
+        sched["_last_push_time"] = now_str
+
+    write_state_and_update_cache(state, ctx)
+    _log(f"[V8][{uid}] tick 完成: 评估 {len(pending)}, 执行 {executed}")
+    return {"evaluated": len(pending), "executed": executed}
+
+
+def _rule_evaluate(intent, state, now):
+    """V8 Layer 1: 规则引擎 — 返回 "send" | "skip" | "wait" """
+    intent_type = intent.get("type", "")
+    now_min = now.hour * 60 + now.minute
+
+    earliest = intent.get("earliest", "00:00")
+    latest = intent.get("latest", "23:59")
+    ideal = intent.get("ideal")
+
+    try:
+        earliest_min = int(earliest.split(":")[0]) * 60 + int(earliest.split(":")[1])
+        latest_min = int(latest.split(":")[0]) * 60 + int(latest.split(":")[1])
+        ideal_min = None
+        if ideal:
+            ideal_min = int(ideal.split(":")[0]) * 60 + int(ideal.split(":")[1])
+    except (ValueError, IndexError):
+        return "wait"
+
+    if now_min < earliest_min:
+        return "wait"
+
+    if now_min >= latest_min:
+        intent["_trigger_reason"] = "兜底触发（已到 latest）"
+        return "send"
+
+    sched = state.get("scheduler", {})
+    rhythm = sched.get("user_rhythm", {})
+    avg_wake = rhythm.get("avg_wake_time", SCHEDULER_DEFAULT_WAKE)
+    try:
+        wake_min = int(avg_wake.split(":")[0]) * 60 + int(avg_wake.split(":")[1])
+        if now_min < wake_min:
+            return "wait"
+    except (ValueError, IndexError):
+        pass
+
+    if intent_type in ("companion", "nudge_check"):
+        nudge = state.get("nudge_state", {})
+        last_msg = nudge.get("last_message_time", "")
+        if last_msg:
+            try:
+                last_dt = datetime.strptime(last_msg, "%Y-%m-%d %H:%M")
+                last_dt = last_dt.replace(tzinfo=BEIJING_TZ)
+                if (now - last_dt).total_seconds() < 1800:
+                    return "wait"
+            except Exception:
+                pass
+
+    if intent_type == "companion":
+        conditions = intent.get("conditions", {})
+        silent_hours = conditions.get("silent_hours", 4)
+        nudge = state.get("nudge_state", {})
+        last_msg = nudge.get("last_message_time", "")
+        if last_msg:
+            try:
+                last_dt = datetime.strptime(last_msg, "%Y-%m-%d %H:%M")
+                last_dt = last_dt.replace(tzinfo=BEIJING_TZ)
+                hours_silent = (now - last_dt).total_seconds() / 3600
+                if hours_silent < silent_hours:
+                    return "wait"
+            except Exception:
+                pass
+
+    max_times = intent.get("max_times")
+    if max_times and intent.get("sent_count", 0) >= max_times:
+        return "skip"
+
+    if ideal_min and now_min >= ideal_min:
+        intent["_trigger_reason"] = "到达 ideal 时间"
+        return "send"
+
+    if not ideal_min:
+        if intent_type == "companion":
+            intent["_trigger_reason"] = "沉默条件满足"
+            return "send"
+        return "wait"
+
+    return "wait"
+
+
+_MERGEABLE = {
+    ("evening_checkin", "daily_report"),
+    ("morning_report", "todo_remind"),
+}
+
+
+def _try_merge_intents(intents):
+    """V8: 尝试合并相近的意图"""
+    types = set(i["type"] for i in intents)
+    consumed = set()
+    for pair in _MERGEABLE:
+        if pair[0] in types and pair[1] in types:
+            consumed.add(pair[1])
+
+    merged = []
+    for intent in intents:
+        if intent["type"] in consumed:
+            intent["status"] = "merged"
+            _log(f"[V8] 意图合并: {intent['type']} 被合并")
+        else:
+            merged.append(intent)
+    return merged
+
+
+def _execute_intent(intent, user_id=None):
+    """V8: 分发执行一个到期意图 — 通过 /system 端点"""
+    intent_type = intent.get("type", "")
+    _log(f"[V8] 执行意图: {intent_type}, user={user_id}, reason={intent.get('_trigger_reason', 'N/A')}")
+
+    action_map = {
+        "morning_report": "morning_report",
+        "todo_remind": "todo_remind",
+        "companion": "companion_check",
+        "nudge_check": "nudge_check",
+        "evening_checkin": "evening_checkin",
+        "daily_report": "daily_report",
+    }
+
+    action = action_map.get(intent_type)
+    if not action:
+        _log(f"[V8] 未知意图类型: {intent_type}")
+        return
+
+    try:
+        payload = {"action": action}
+        if user_id:
+            payload["user_id"] = user_id
+        requests.post(
+            f"http://127.0.0.1:{SERVER_PORT}/system",
+            json=payload,
+            timeout=120
+        )
+    except Exception as e:
+        _log(f"[V8] 意图执行失败 {intent_type}: {e}")
+        raise
+
+
+# ============ V8: APScheduler 内嵌定时调度（心跳驱动） ============
 
 def _setup_builtin_scheduler():
+    """V8: 内嵌定时调度器 — 心跳驱动 + 少量固定任务
+
+    改前（10 个独立 cron）→ 改后（4 个固定 + 1 心跳 + 1 每日初始化）：
+    - 保留：refresh_cache / mood_generate / periodic_tasks(含 weekly/monthly)
+    - 新增：scheduler_tick（每 30 分钟心跳评估）/ daily_init（05:00 生成意图队列）
+    - 移除：morning_report / todo_remind / nudge_check / companion_check / evening_checkin / daily_report
+            → 全部由 scheduler_tick 智能驱动
     """
-    当检测到本地运行模式时，自动启动内置定时调度器。
-    替代独立部署的 scheduler/ Event 函数，无需额外配置。
-    SCF 部署时不会触发（通过 SCF_RUNTIME 环境变量判断）。
-    """
-    # SCF 环境不启动内置调度器（SCF 有自己的定时触发器）
     if os.environ.get("SCF_RUNTIME") or os.environ.get("TENCENTCLOUD_RUNENV"):
         _log("[Scheduler] 检测到 SCF 环境，跳过内置调度器")
         return
 
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
-        from apscheduler.triggers.cron import CronTrigger
     except ImportError:
         _log("[Scheduler] 未安装 apscheduler，跳过内置调度器。如需定时任务请: pip install apscheduler")
         return
@@ -1444,34 +1815,42 @@ def _setup_builtin_scheduler():
     scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
 
     def _fire_system_action(action):
-        """通过 HTTP 调用自身的 /system 端点（不传 user_id，遍历所有活跃用户）"""
+        """通过 HTTP 调用自身 /system 端点（不传 user_id，遍历所有活跃用户）"""
         try:
-            url = f"http://127.0.0.1:9000/system"
+            url = f"http://127.0.0.1:{SERVER_PORT}/system"
             resp = requests.post(url, json={"action": action}, timeout=600)
             _log(f"[Scheduler] {action} -> {resp.status_code}")
         except Exception as e:
             _log(f"[Scheduler] {action} 失败: {e}")
 
-    # 定时任务表（与 scheduler/serverless.yml 保持一致）
     jobs = [
-        ("refresh_cache",   CronTrigger(minute="*/30")),
-        ("morning_report",  CronTrigger(hour=8, minute=0)),
-        ("evening_checkin", CronTrigger(hour=21, minute=0)),
-        ("todo_remind",     CronTrigger(hour="9,14,18", minute=0)),
-        ("daily_report",    CronTrigger(hour=22, minute=30)),
-        ("mood_generate",   CronTrigger(hour=22, minute=0)),
-        ("weekly_review",   CronTrigger(day_of_week="sun", hour=21, minute=30)),
-        ("nudge_check",     CronTrigger(hour=14, minute=0)),
-        ("companion_check", CronTrigger(hour="8,10,12,14,16,18,20,22", minute=0)),
-        ("monthly_review",  CronTrigger(day="last", hour=22, minute=0)),
+        # 保留：不依赖用户节奏的固定任务
+        ("refresh_cache",   {"trigger": "interval", "minutes": 30}),
+        ("mood_generate",   {"trigger": "cron", "hour": 22, "minute": 0}),
+        ("weekly_review",   {"trigger": "cron", "day_of_week": "sun", "hour": 21, "minute": 30}),
+        ("monthly_review",  {"trigger": "cron", "day": "last", "hour": 22, "minute": 0}),
+
+        # V8 新增：智能调度心跳
+        ("scheduler_tick",  {"trigger": "interval", "minutes": SCHEDULER_TICK_MINUTES}),
+
+        # V8 新增：每日意图初始化
+        ("daily_init",      {"trigger": "cron", "hour": 5, "minute": 0}),
     ]
 
-    for action, trigger in jobs:
-        scheduler.add_job(_fire_system_action, trigger, args=[action], id=action,
-                          max_instances=1, misfire_grace_time=300)
+    for action, kwargs in jobs:
+        scheduler.add_job(
+            _fire_system_action, args=[action],
+            id=action, max_instances=1,
+            misfire_grace_time=300,
+            **kwargs
+        )
 
     scheduler.start()
-    _log(f"[Scheduler] 内置调度器已启动，共 {len(jobs)} 个定时任务")
+    _log(f"[Scheduler][V8] 已启动 {len(jobs)} 个任务 "
+         f"(心跳={SCHEDULER_TICK_MINUTES}min, 固定=4, 每日初始化=05:00)")
+
+    # 启动时兜底触发一次 daily_init
+    threading.Thread(target=lambda: _fire_system_action("daily_init"), daemon=True).start()
 
 
 # ============ 启动初始化 ============
@@ -1485,4 +1864,4 @@ def _init_system_dirs():
 if __name__ == '__main__':
     _init_system_dirs()
     _setup_builtin_scheduler()
-    app.run(host='0.0.0.0', port=9000, threaded=True)
+    app.run(host='0.0.0.0', port=SERVER_PORT, threaded=True)

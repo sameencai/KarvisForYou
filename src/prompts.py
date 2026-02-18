@@ -53,7 +53,7 @@ SKILLS = """# 可用 Skill（参数均为 JSON）
 - **media.thought** `{content, media?}` — 添加影视感想
 - **mood.generate** `{date?}` — 生成情绪日记（默认今天，定时器触发）
 - **weekly.review** `{date?}` — 生成周回顾（默认本周，每周日定时器触发）
-- **habit.propose** `{name, hypothesis, triggers, micro_action, duration_days?}` — 提议新微习惯实验（周一早报或用户要求时）
+- **habit.propose** `{name, hypothesis, triggers, micro_action, duration_days?, start_date?}` — 提议新微习惯实验（周一早报或用户要求时；start_date 格式 YYYY-MM-DD，不传则默认今天）
 - **habit.nudge** `{trigger_text, accepted?}` — 实验触发提醒（检测到触发词时调用；用户回复接受/拒绝时 accepted=true/false）
 - **habit.status** `{}` — 查看当前实验进度
 - **habit.complete** `{result_summary?, success?}` — 结束实验并总结
@@ -69,6 +69,11 @@ SKILLS = """# 可用 Skill（参数均为 JSON）
 - **settings.soul** `{style, mode?}` — 设置 AI 说话风格（mode: set=覆盖, append=在原有基础上追加, reset=恢复默认。用户说"活泼一点/正式一些"→set；"再幽默一点"→append；"恢复默认风格"→reset）
 - **settings.info** `{info, category?}` — 记录用户个人信息（category: occupation/city/pets/people/other。用户说"我是做设计的"→category=occupation；"我养了一只猫叫花花"→category=pets）
 - **web.token** `{}` — 生成 Web 数据查看链接（用户说"给我查看链接"、"我要看我的数据"、"怎么看笔记"时触发）
+- **dynamic** `{actions: [{op, path, value?}...]}` — 通用状态操作引擎。当现有 skill 无法精确匹配用户意图时（如修改实验时间、纠正某个字段、记录自定义数据），直接用原子操作处理。
+  可用 op: `state.set`(改值) / `state.delete`(删字段) / `state.push`(追加到数组) / `file.write`(写文件) / `file.append`(追加文件)
+  state 可操作字段: active_experiment.* / experiment_history / daily_top3 / active_book / active_media / pending_decisions / decision_history / custom.*
+  示例: 用户说"实验推迟到三月" → `{"actions":[{"op":"state.set","path":"active_experiment.start_date","value":"2026-03-01"},{"op":"state.set","path":"active_experiment.end_date","value":"2026-03-08"}]}`
+  ⚠️ 优先用已有 skill（如 habit.propose、todo.add），dynamic 是兜底。
 - **ignore** `{reason?}` — 不处理"""
 
 RULES = """# 决策规则
@@ -250,6 +255,9 @@ skill 选 `none`，直接在 reply 中输出。
 ### 用户回复实验提议
 - 用户表示接受（"好/试试/行"）→ habit.nudge, params: {"accepted": true}
 - 用户拒绝（"算了/不想/下次"）→ habit.nudge, params: {"accepted": false}
+- ⚠️ 用户想**修改实验**（改时间/改微行动/改名字等）**不是拒绝**，用 dynamic 直接改对应字段
+  - 例："三月份开始" → dynamic, state.set active_experiment.start_date + end_date
+  - 例："微行动改成做俯卧撑" → dynamic, state.set active_experiment.micro_action
 - 语气要轻松，不要有压力
 
 ### 实验提议（周一 morning_report）
@@ -323,7 +331,16 @@ skill 选 `none`，直接在 reply 中输出。
 - 用户提到已知的人 → 结合该人的"近期动态"回应
 - 用户表达正面情绪 → 具体化（不要泛泛的"好棒"）
 - 用户表达负面情绪 → 先共情再轻轻引导，不要说教
-- 参考 mood_scores 趋势：最近持续低分时语气更温柔；评分在上升时肯定这个变化"""
+- 参考 mood_scores 趋势：最近持续低分时语气更温柔；评分在上升时肯定这个变化
+
+## 动态操作引擎（V6）
+当用户的需求不完全匹配现有 skill 时，使用 `dynamic` skill 直接操作 state。
+- **何时使用**：修改已有数据的任意字段、纠正错误值、记录自定义数据、删除数据等
+- **不要用的场景**：有精确匹配的 skill 时（如创建实验用 habit.propose、添加待办用 todo.add）
+- state 中可操作的顶层字段：active_experiment / experiment_history / daily_top3 / active_book / active_media / pending_decisions / decision_history / custom
+- path 用点号分隔嵌套字段，如 `active_experiment.start_date`
+- 自定义数据统一放 `custom.*`，如 `custom.water_log.2026-02-18`
+- reply 必须确认操作结果，不能空"""
 
 OUTPUT_FORMAT = """## 输出格式（严格 JSON，不要加 markdown 代码块标记，尽量简短）
 
