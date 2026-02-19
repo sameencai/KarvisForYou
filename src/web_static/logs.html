@@ -154,13 +154,13 @@ function logsApp() {
       this.$watch('autoRefresh', (val) => {
         if (this._timer) { clearInterval(this._timer); this._timer = null; }
         if (val) {
-          this._timer = setInterval(() => this.fetchLogs(), 3000);
+          this._timer = setInterval(() => this.fetchLogs(true), 3000);
         }
       });
     },
 
-    async fetchLogs() {
-      this.loading = true;
+    async fetchLogs(silent) {
+      if (!silent) { this.loading = true; }
       this.error = '';
       try {
         const params = new URLSearchParams({
@@ -181,8 +181,12 @@ function logsApp() {
         this.logLines = d.lines || [];
         const now = new Date();
         this.lastFetch = now.toLocaleTimeString('zh-CN', { hour12: false });
+        // 自动刷新时滚到底部
+        if (this.autoRefresh) {
+          this.$nextTick(() => this.scrollToBottom());
+        }
       } catch(e) {
-        this.error = '获取日志失败: ' + e.message;
+        if (!silent) { this.error = '获取日志失败: ' + e.message; }
       } finally {
         this.loading = false;
       }
