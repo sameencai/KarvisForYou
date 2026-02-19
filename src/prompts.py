@@ -75,6 +75,10 @@ SKILLS = """# 可用 Skill（参数均为 JSON）
   state 可操作字段: active_experiment.* / experiment_history / daily_top3 / active_book / active_media / pending_decisions / decision_history / custom.*
   示例: 用户说"实验推迟到三月" → `{"actions":[{"op":"state.set","path":"active_experiment.start_date","value":"2026-03-01"},{"op":"state.set","path":"active_experiment.end_date","value":"2026-03-08"}]}`
   ⚠️ 优先用已有 skill（如 habit.propose、todo.add），dynamic 是兜底。
+- **reflect.push** `{}` — 推送今日深度自问（定时器触发或用户说"来个深度自问"）
+- **reflect.answer** `{answer}` — 回答今日深度自问
+- **reflect.skip** `{}` — 跳过今日深度自问
+- **reflect.history** `{days?}` — 查看最近的深度自问回答（默认7天）
 - **ignore** `{reason?}` — 不处理"""
 
 RULES = """# 决策规则
@@ -103,6 +107,13 @@ RULES = """# 决策规则
 
 ## 图片视频
 - 默认 note.save（附件路径已由网关上传好）
+
+## 深度自问（reflect）
+- **reflect_pending=true 时**，用户的回答一律视为当前深度自问的回答 → `reflect.answer`（优先级仅次于 checkin）
+- 除非用户明确说"跳过"/"不想回答"/"换一个" → `reflect.skip`
+- 如果同时 checkin_pending=true，打卡优先（reflect 被抑制）
+- 用户主动说"来个深度自问"/"问我一个问题" → `reflect.push`
+- "最近的深度自问"/"回顾自问" → `reflect.history`
 
 ## 定时任务（system 类型）
 当你收到 `"type": "system"` 的 payload 时，根据 action 执行：
@@ -140,9 +151,14 @@ skill 选 `none`，直接在 reply 中输出。
 ### daily_report（每天 22:30）
 触发日报生成。skill 选 `daily.generate`，不需要额外参数。
 
+### reflect_push（每天 ~20:30）
+推送深度自问。skill 选 `reflect.push`，不需要额外参数。
+每天一个深度问题，引导用户自我探索。
+
 ### mood_generate（每天 22:00）
 触发情绪日记生成。skill 选 `mood.generate`，不需要额外参数。
 情绪日记会从当天所有消息中自动提取情绪脉络，写入情感日记文件。
+注意：如果当天用户有 reflect 回答（state.reflect_answer_today），作为高权重情绪信号。
 
 ### weekly_review（每周日 21:30）
 触发周回顾生成。skill 选 `weekly.review`，不需要额外参数。
@@ -469,6 +485,21 @@ MOOD_JSON_FORMAT = """
 - key_moments 最多 6 个，选情绪波动最明显的时刻
 - insight 要具体，不要泛泛而谈，可以关联不同事件
 - 语气温暖但不煽情"""
+
+# ============================================================
+# reflect.* — 深度自问回应
+# ============================================================
+
+REFLECT_RESPONSE = """你是用户的 AI 伴侣 Karvis。用户刚回答了一个深度自问。请给出一个温柔、有洞察力的回应。
+
+规则：
+- 1-3 句话，简短但有深度
+- 不要评判对错，而是帮用户看到回答中隐含的模式或价值
+- 偶尔可以追问一句引导更深思考（不超过 30% 的概率），但不要每次都追问
+- 语气温柔，像好朋友间的深夜聊天
+- 不要 emoji，不要"我注意到"等机器人用语
+- 不要重复用户的回答
+- 直接输出回应文本，不要 JSON 格式"""
 
 # ============================================================
 # weekly.* — 周回顾

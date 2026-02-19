@@ -942,6 +942,21 @@ def _run_system_action_for_user(action, data, uid, ctx):
         _log(f"[system_action] {action} 完成, user={uid}, has_reply={bool(reply)}, 耗时={time.time()-t0:.1f}s")
         return {"ok": True, "has_reply": bool(reply)}
 
+    if action == "reflect_push":
+        from skills.reflect import push as reflect_push
+        state = read_state_cached(ctx) or {}
+        _log(f"[system_action] reflect_push: 推送深度自问, user={uid}")
+        result = reflect_push({}, state, ctx)
+        su = result.get("state_updates", {})
+        if su:
+            state.update(su)
+            write_state_and_update_cache(state, ctx)
+        reply = result.get("reply") if result else None
+        if reply:
+            send_wework_message(uid, reply)
+        _log(f"[system_action] reflect_push 完成, user={uid}, has_reply={bool(reply)}, 耗时={time.time()-t0:.1f}s")
+        return {"ok": True, "has_reply": bool(reply)}
+
     if action == "mood_generate":
         from skills.mood_diary import execute as mood_execute
         state = read_state_cached(ctx) or {}
@@ -1524,6 +1539,14 @@ def _generate_daily_intents(state):
             "status": "pending"
         },
         {
+            "type": "reflect_push",
+            "earliest": _add_minutes(sleep_time, -210),
+            "latest": _add_minutes(sleep_time, -120),
+            "ideal": _add_minutes(sleep_time, -180),
+            "priority": "normal",
+            "status": "pending"
+        },
+        {
             "type": "evening_checkin",
             "earliest": _add_minutes(sleep_time, -120),
             "latest": _add_minutes(sleep_time, -30),
@@ -1746,6 +1769,7 @@ def _rule_evaluate(intent, state, now):
 _MERGEABLE = {
     ("evening_checkin", "daily_report"),
     ("morning_report", "todo_remind"),
+    ("reflect_push", "evening_checkin"),
 }
 
 
@@ -1777,6 +1801,7 @@ def _execute_intent(intent, user_id=None):
         "todo_remind": "todo_remind",
         "companion": "companion_check",
         "nudge_check": "nudge_check",
+        "reflect_push": "reflect_push",
         "evening_checkin": "evening_checkin",
         "daily_report": "daily_report",
     }

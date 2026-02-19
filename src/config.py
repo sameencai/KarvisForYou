@@ -73,3 +73,6 @@ LOG_KARVIS_COMPOSE_DIR = os.environ.get("LOG_KARVIS_COMPOSE_DIR", "/opt/karvis/d
 
 # ============ 服务端口 ============
 SERVER_PORT = int(os.environ.get("SERVER_PORT", "9000"))
+
+# ============ 深度自问（Reflect） ============
+REFLECT_COOLDOWN_DAYS = 90       # 同一问题最少间隔天数

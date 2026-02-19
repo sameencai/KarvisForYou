@@ -44,7 +44,7 @@ def execute(params, state, ctx):
 
     # 2. AI 分析情绪
     from brain import call_deepseek
-    analysis = _ai_analyze_mood(data, date_str, call_deepseek)
+    analysis = _ai_analyze_mood(data, date_str, call_deepseek, state)
 
     if not analysis:
         return {"success": False, "reply": "AI 情绪分析失败"}
@@ -232,9 +232,11 @@ def _extract_checkin_data(daily_text):
     return items if items else None
 
 
-def _ai_analyze_mood(data, date_str, call_deepseek):
+def _ai_analyze_mood(data, date_str, call_deepseek, state=None):
     """调用 AI 分析当天情绪"""
     import prompts
+
+    state = state or {}
 
     # 组装 prompt
     parts = [f"分析以下 {date_str} 的记录，提取情绪信息。"]
@@ -246,6 +248,12 @@ def _ai_analyze_mood(data, date_str, call_deepseek):
 
     if data["notes"]:
         parts.append(f"\n【当天消息记录】\n{data['notes'][:3000]}")
+
+    # 深度自问回答（高权重情绪信号）
+    reflect_answer = state.get("reflect_answer_today")
+    if reflect_answer:
+        reflect_q = state.get("reflect_question", "")
+        parts.append(f"\n【深度自问（高权重）】\n问题：{reflect_q}\n回答：{reflect_answer}")
 
     if data["decisions"]:
         parts.append("\n【AI 决策日志（辅助）】")

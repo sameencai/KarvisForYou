@@ -422,6 +422,12 @@ def _build_state_summary(state):
     else:
         parts.append("未在打卡")
 
+    # 深度自问状态
+    if state.get("reflect_pending"):
+        reflect_q = state.get("reflect_question", "")
+        reflect_cat = state.get("reflect_category", "")
+        parts.append(f"深度自问进行中: [{reflect_cat}] \"{reflect_q}\"")
+
     # 活跃书籍/影视
     active_book = state.get("active_book", "")
     if active_book:
@@ -581,8 +587,23 @@ def process(payload, send_fn=None, ctx=None):
     #    Stage 1: 规则预筛 — 已由 Skill handler 结构化处理的消息直接跳过
     #    Stage 2: Flash 后判 — 回复发出后异步调 Flash 判断是否值得写入
     primary_skill = _get_primary_skill(decision)
+
+    # Reflect 防护 — reflect_pending 时，非 reflect skill 强制重路由（优先级低于 checkin）
+    _REFLECT_SKILLS = ("reflect.answer", "reflect.skip", "reflect.history", "reflect.push")
+    _CHECKIN_SKILLS = ("checkin.answer", "checkin.skip", "checkin.cancel", "checkin.start")
+    if (state.get("reflect_pending")
+            and not state.get("checkin_pending")
+            and payload.get("type") != "system"
+            and primary_skill not in _REFLECT_SKILLS
+            and primary_skill not in _CHECKIN_SKILLS):
+        _log(f"[Brain] 深度自问防护: {primary_skill} → reflect.answer")
+        decision["skill"] = "reflect.answer"
+        decision["params"] = {"answer": user_text}
+        decision.pop("steps", None)
+        primary_skill = "reflect.answer"
+
     _pending_note_filter = False  # 是否需要 Flash 后判
-    if payload.get("type") != "system" and primary_skill not in ("checkin.answer", "checkin.skip", "checkin.cancel", "checkin.start"):
+    if payload.get("type") != "system" and primary_skill not in ("checkin.answer", "checkin.skip", "checkin.cancel", "checkin.start", "reflect.answer", "reflect.skip"):
         if primary_skill in _SKIP_NOTE_SKILLS:
             _log(f"[Brain][NoteFilter] 规则跳过: skill={primary_skill}")
         elif primary_skill == "note.save":
@@ -858,6 +879,7 @@ _SIMPLE_SKILLS = frozenset({
     "web.token",
     "habit.propose", "habit.nudge", "habit.status", "habit.complete",
     "decision.record", "dynamic",
+    "reflect.push", "reflect.answer", "reflect.skip", "reflect.history",
 })
 
 # ── 速记智能过滤：规则预筛跳过集合（V-Web-01）──
