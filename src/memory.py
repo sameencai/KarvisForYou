@@ -136,8 +136,8 @@ def add_message_to_state(state, role, content):
 
 
 def maybe_compress_messages(messages):
-    """对话压缩：保留最近 4 条原始消息，旧消息压缩为摘要。"""
-    COMPRESS_KEEP_RECENT = 4
+    """对话压缩：保留最近 6 条原始消息，旧消息压缩为摘要（每条 100 字，总上限 800 字）。"""
+    COMPRESS_KEEP_RECENT = 6  # 保留最近 6 条原始消息
 
     if len(messages) <= RECENT_MESSAGES_LIMIT:
         return messages
@@ -152,8 +152,9 @@ def maybe_compress_messages(messages):
             continue
         role = "用户" if m.get("role") == "user" else "Karvis"
         content = m.get("content", "")
-        if len(content) > 50:
-            content = content[:50] + "..."
+        # 截取关键部分（保留足够语义）
+        if len(content) > 100:
+            content = content[:100] + "..."
         summary_parts.append(f"{role}: {content}")
 
     time_range = ""
@@ -164,8 +165,8 @@ def maybe_compress_messages(messages):
             time_range = f"({first_time} ~ {last_time})"
 
     summary_text = f"[对话摘要] {time_range} " + " | ".join(summary_parts)
-    if len(summary_text) > 500:
-        summary_text = summary_text[:500] + "..."
+    if len(summary_text) > 800:
+        summary_text = summary_text[:800] + "..."
 
     summary_msg = {
         "role": "system",
