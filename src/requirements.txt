@@ -6,3 +6,4 @@ tencentcloud-sdk-python-asr
 beautifulsoup4
 apscheduler
 python-dotenv
+cnlunar

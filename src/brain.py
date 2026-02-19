@@ -11,6 +11,12 @@ import requests
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+try:
+    import cnlunar
+    _HAS_CNLUNAR = True
+except ImportError:
+    _HAS_CNLUNAR = False
+
 from config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,
     QWEN_API_KEY, QWEN_BASE_URL, QWEN_MODEL, QWEN_VL_MODEL,
@@ -351,13 +357,48 @@ def call_deepseek(messages, max_tokens=500, temperature=0.3):
 
 # ============ Prompt 组装 ============
 
+_WEEKDAY_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+
+def _build_time_string(now_bj):
+    """构建包含公历+农历的时间字符串，注入到 System Prompt。
+    
+    示例输出:
+      2026-02-19 20:30 星期四 | 农历正月初三 | 春节假期 | 雨水
+    """
+    base = now_bj.strftime("%Y-%m-%d %H:%M")
+    weekday = _WEEKDAY_CN[now_bj.weekday()]
+    parts = [f"{base} {weekday}"]
+
+    if _HAS_CNLUNAR:
+        try:
+            lunar = cnlunar.Lunar(now_bj.replace(tzinfo=None), godType='8char')
+            # 农历日期
+            parts.append(f"农历{lunar.lunarMonthCn}{lunar.lunarDayCn}")
+            # 农历节日（如 春节、元宵、端午 等）
+            festivals = []
+            if lunar.lunarFestival:
+                festivals.append(lunar.lunarFestival)
+            if lunar.solarFestival:
+                festivals.append(lunar.solarFestival)
+            if festivals:
+                parts.append("、".join(festivals))
+            # 节气（当天恰逢节气才有值）
+            st = lunar.todaySolarTerms
+            if st and st != "无":
+                parts.append(f"节气：{st}")
+        except Exception:
+            pass  # cnlunar 异常不影响主流程
+
+    return " | ".join(parts)
+
 def build_system_prompt(state, ctx, prompt_futs=None):
     """组装完整的 System Prompt（多用户版，支持用户自定义 SOUL）
     
     prompt_futs: 可选，外部提前提交的 {"mem": Future} dict，用于与 state 读取并行
     """
     beijing_tz = timezone(timedelta(hours=8))
-    current_time = datetime.now(beijing_tz).strftime("%Y-%m-%d %H:%M %A")
+    now_bj = datetime.now(beijing_tz)
+    current_time = _build_time_string(now_bj)
 
     # memory 从该用户的文件加载
     if prompt_futs and "mem" in prompt_futs:
