@@ -1,6 +1,6 @@
 ---
 tags: [karvisforall, issues]
-updated: 2026-02-18
+updated: 2026-02-19
 ---
 
 # KarvisForAll — 已知问题与迭代方向
@@ -39,6 +39,12 @@ updated: 2026-02-18
 | F-013 | 用户节奏自学习：起床/入睡时间推算 + 滑动加权平均 |
 | F-014 | V6 动态能力引擎：LLM 自由编排原子操作 + 白名单安全控制 |
 | F-015 | Git Push 云服务器部署：`git push deploy master` 一键部署 |
+| F-016 | 企微告警推送：慢请求连续检测 + 异常告警 + 冷却防风暴（DD-019） |
+| F-017 | 技术监控中心重构：logs.html 三 Tab（日志/统计监控/错误聚合），admin.html 精简为用户运营中心（DD-020） |
+| F-018 | 成本预算监控：月成本计算 + 预算进度条（默认 ¥50）+ 超 80% 红色告警 |
+| F-019 | Prompt 膨胀检测：prompt_tokens 分布直方图（<4K/4-8K/8-12K/>12K）+ >12K 黄色告警 |
+| F-020 | 错误日志聚合：从日志中提取 ERROR/Traceback，按错误签名去重计数，Sentry 风格展示 Top 20 |
+| F-021 | 延迟瀑布图增强：可点击展开查看 input/thinking/skill/reply 详情 |
 
 ## 优化迭代方向
 
@@ -51,6 +57,8 @@ updated: 2026-02-18
 | O-003 | **dynamic custom.* 聚合查询** | 让 LLM 能回答"这周喝了多少杯水"这类 custom 命名空间聚合问题 | 低 |
 | O-004 | **V8 节奏数据可视化** | 将 user_rhythm（起床/入睡/活跃时段）可视化到 Web 页面 | 低 |
 | O-005 | **批量导入历史数据** | 新用户导入历史聊天记录/笔记到 Quick-Notes | 中 |
+| O-010 | **管理员用户详情页** | `/web/admin/user/<uid>` 单用户视图：消息量趋势、活跃时段、技能使用分布 | 中 |
+| O-011 | **UptimeRobot 外部监控** | 接入 UptimeRobot 监控 `/health` 端点，服务宕机时邮件/短信告警 | 低 |
 
 ### P2 — 架构演进
 
