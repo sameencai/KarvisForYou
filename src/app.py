@@ -2103,6 +2103,12 @@ def _detect_callback_url():
 
     # --- 4. 本地环境：尝试启动 cloudflared ---
     cloudflared_path = shutil.which("cloudflared")
+
+    # --- 4a. 如果没装 cloudflared，自动下载 ---
+    if not cloudflared_path:
+        cloudflared_path = _auto_install_cloudflared()
+
+    # --- 4b. 启动隧道 ---
     if cloudflared_path:
         _log("[Tunnel] 检测到本地环境，正在启动 cloudflared 隧道...")
         try:
@@ -2113,7 +2119,6 @@ def _detect_callback_url():
             )
             # 等待隧道 URL 出现（最多 30 秒）
             tunnel_url = None
-            import select
             deadline = time.time() + 30
             while time.time() < deadline:
                 line = tunnel_process.stdout.readline()
@@ -2139,12 +2144,125 @@ def _detect_callback_url():
             _print_callback_banner(f"http://localhost:{SERVER_PORT}/wework",
                                   source="本地（无隧道）")
     else:
-        _log("[Tunnel] 未找到 cloudflared，本地环境无法接收企微回调")
-        _log("[Tunnel] 安装方法: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/")
+        _log("[Tunnel] cloudflared 自动安装失败，本地环境无法接收企微回调")
+        _log("[Tunnel] 手动安装: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/")
         _print_callback_banner(f"http://localhost:{SERVER_PORT}/wework",
-                              source="本地（需安装 cloudflared）")
+                              source="本地（需手动安装 cloudflared）")
 
     return tunnel_process
+
+
+def _auto_install_cloudflared():
+    """
+    自动下载安装 cloudflared（跨平台）。
+    返回可执行文件路径，失败返回 None。
+    """
+    import platform, subprocess, shutil, zipfile, stat
+
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    _log("[Tunnel] 未找到 cloudflared，尝试自动安装...")
+
+    # --- 1. 先试系统包管理器 ---
+    if system == "darwin" and shutil.which("brew"):
+        _log("[Tunnel] 使用 brew 安装 cloudflared...")
+        try:
+            subprocess.run(["brew", "install", "cloudflared"], check=True,
+                           capture_output=True, text=True, timeout=120)
+            path = shutil.which("cloudflared")
+            if path:
+                _log(f"[Tunnel] ✅ cloudflared 安装成功: {path}")
+                return path
+        except Exception as e:
+            _log(f"[Tunnel] brew 安装失败: {e}")
+
+    if system == "linux" and shutil.which("apt-get"):
+        _log("[Tunnel] 使用 apt 安装 cloudflared...")
+        try:
+            cmds = [
+                "curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null",
+                'echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflared.list',
+                "sudo apt-get update -qq",
+                "sudo apt-get install -y cloudflared"
+            ]
+            for cmd in cmds:
+                subprocess.run(cmd, shell=True, check=True,
+                               capture_output=True, text=True, timeout=60)
+            path = shutil.which("cloudflared")
+            if path:
+                _log(f"[Tunnel] ✅ cloudflared 安装成功: {path}")
+                return path
+        except Exception as e:
+            _log(f"[Tunnel] apt 安装失败: {e}")
+
+    # --- 2. 直接下载二进制 ---
+    _log("[Tunnel] 尝试直接下载 cloudflared 二进制文件...")
+
+    # 确定下载 URL
+    base = "https://github.com/cloudflare/cloudflared/releases/latest/download"
+    if system == "windows":
+        if "64" in machine or "amd64" in machine:
+            url = f"{base}/cloudflared-windows-amd64.exe"
+        else:
+            url = f"{base}/cloudflared-windows-386.exe"
+        filename = "cloudflared.exe"
+    elif system == "darwin":
+        if "arm" in machine or "aarch64" in machine:
+            url = f"{base}/cloudflared-darwin-arm64.tgz"
+        else:
+            url = f"{base}/cloudflared-darwin-amd64.tgz"
+        filename = "cloudflared"
+    else:  # linux
+        if "arm" in machine or "aarch64" in machine:
+            url = f"{base}/cloudflared-linux-arm64"
+        else:
+            url = f"{base}/cloudflared-linux-amd64"
+        filename = "cloudflared"
+
+    # 下载到项目根目录的 bin/ 下
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    bin_dir = os.path.join(project_root, "bin")
+    os.makedirs(bin_dir, exist_ok=True)
+    target = os.path.join(bin_dir, filename)
+
+    try:
+        _log(f"[Tunnel] 下载中: {url}")
+        resp = requests.get(url, timeout=60, stream=True,
+                           headers={"User-Agent": "Karvis-Installer/1.0"})
+        resp.raise_for_status()
+
+        if url.endswith(".tgz"):
+            # macOS 是 tgz 包
+            import tarfile, io
+            with tarfile.open(fileobj=io.BytesIO(resp.content)) as tar:
+                for member in tar.getmembers():
+                    if "cloudflared" in member.name:
+                        f = tar.extractfile(member)
+                        if f:
+                            with open(target, "wb") as out:
+                                out.write(f.read())
+                            break
+        else:
+            with open(target, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+        # 加执行权限（非 Windows）
+        if system != "windows":
+            os.chmod(target, os.stat(target).st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+        # 验证
+        result = subprocess.run([target, "--version"], capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            _log(f"[Tunnel] ✅ cloudflared 下载成功: {target} ({result.stdout.strip()})")
+            return target
+        else:
+            _log(f"[Tunnel] 下载的文件无法执行: {result.stderr}")
+            return None
+
+    except Exception as e:
+        _log(f"[Tunnel] 下载失败: {e}")
+        return None
 
 
 def _print_callback_banner(callback_url, source="", public_ip=None, tunnel_url=None):
