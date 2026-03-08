@@ -2177,6 +2177,29 @@ def _print_callback_banner(callback_url, source="", public_ip=None, tunnel_url=N
 
 if __name__ == '__main__':
     _init_system_dirs()
+
+    # ============ 渠道注册 ============
+    from config import ACTIVE_CHANNELS, TELEGRAM_BOT_TOKEN
+    _log(f"[Init] 活跃渠道: {ACTIVE_CHANNELS}")
+
+    # 企微渠道（默认）
+    if "wework" in ACTIVE_CHANNELS:
+        channel_router.register_channel("wework", send_wework_message)
+
+    # Telegram 渠道
+    if "telegram" in ACTIVE_CHANNELS and TELEGRAM_BOT_TOKEN:
+        from telegram_bot import send_telegram_message, register_telegram_routes, setup_telegram_webhook
+        channel_router.register_channel("telegram", send_telegram_message)
+        register_telegram_routes(app)
+        # 启动后异步设置 Webhook
+        _tg_domain = os.environ.get("WEB_DOMAIN", "")
+        if _tg_domain and "127.0.0.1" not in _tg_domain and "localhost" not in _tg_domain:
+            _tg_base = f"https://{_tg_domain}"
+            threading.Thread(
+                target=lambda: setup_telegram_webhook(_tg_base),
+                daemon=True
+            ).start()
+
     _setup_builtin_scheduler()
 
     # 启动后延迟 2 秒检测回调地址（等 Flask 端口就绪）
