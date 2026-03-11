@@ -735,7 +735,7 @@ Web 服务与消息处理服务共享同一个 Flask 进程，通过路由前缀
 |---|---|---|---|
 | `DEEPSEEK_API_KEY` | 是 | — | DeepSeek API 密钥 |
 | `DEEPSEEK_BASE_URL` | 是 | — | DeepSeek API 地址 |
-| `DEEPSEEK_MODEL` | 是 | `deepseek-chat` | 模型名 |
+| `DEEPSEEK_MODEL` | 是 | `deepseek-v3` | 模型名（腾讯云 lkeap 用 `deepseek-v3`；DeepSeek 官方用 `deepseek-chat`） |
 | `QWEN_API_KEY` | 否 | — | Qwen Flash API 密钥 |
 | `QWEN_BASE_URL` | 否 | — | Qwen API 地址 |
 | `QWEN_MODEL` | 否 | — | Qwen 模型名 |

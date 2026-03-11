@@ -312,7 +312,10 @@ def call_llm(messages, model_tier="main", max_tokens=500,
 
 def _call_deepseek(messages, max_tokens=500, temperature=0.3,
                    enable_thinking=False):
-    """调用 DeepSeek V3.2，支持 thinking 模式控制"""
+    """调用 DeepSeek，支持 thinking 模式控制
+    腾讯云 lkeap: model=deepseek-v3 / deepseek-v3-0324
+    DeepSeek 官方: model=deepseek-chat
+    """
     url = f"{DEEPSEEK_BASE_URL}/chat/completions"
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
@@ -324,8 +327,8 @@ def _call_deepseek(messages, max_tokens=500, temperature=0.3,
         "max_tokens": max_tokens,
         "temperature": temperature
     }
-    # V3.2 支持 thinking 模式控制
-    if "v3.2" in DEEPSEEK_MODEL:
+    # DeepSeek 官方 API 支持 enable_thinking 参数；腾讯云兼容接口会忽略未知参数
+    if "deepseek" in DEEPSEEK_MODEL.lower():
         data["enable_thinking"] = enable_thinking
 
     total_chars = sum(len(m.get("content", "")) for m in messages)

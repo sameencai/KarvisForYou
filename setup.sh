@@ -179,7 +179,7 @@ else
 # 推荐使用腾讯云 lkeap（国内网络稳定）
 DEEPSEEK_API_KEY=${DEEPSEEK_KEY}
 DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL}
-DEEPSEEK_MODEL=deepseek-v3-0324
+DEEPSEEK_MODEL=deepseek-v3
 
 # --- Qwen Flash API（可选，留空则降级到 DeepSeek） ---
 QWEN_API_KEY=

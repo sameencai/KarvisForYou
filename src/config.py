@@ -9,7 +9,7 @@ import os
 # ============ DeepSeek API (Tier 2/3: Main + Think) ============
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v3.2")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v3")
 
 # ============ Qwen Flash API (Tier 1: Flash) ============
 QWEN_API_KEY = os.environ.get("QWEN_API_KEY", "")
