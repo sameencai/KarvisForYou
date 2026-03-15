@@ -313,7 +313,7 @@ def call_llm(messages, model_tier="main", max_tokens=500,
 def _call_deepseek(messages, max_tokens=500, temperature=0.3,
                    enable_thinking=False):
     """调用 DeepSeek，支持 thinking 模式控制
-    腾讯云 lkeap: model=deepseek-v3 / deepseek-v3-0324
+    腾讯云 lkeap: model=deepseek-v3.2
     DeepSeek 官方: model=deepseek-chat
     """
     url = f"{DEEPSEEK_BASE_URL}/chat/completions"

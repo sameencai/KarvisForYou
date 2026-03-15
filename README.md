@@ -190,7 +190,7 @@ python3 app.py
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/v1` | API 地址（DeepSeek 官方） |
-| `DEEPSEEK_MODEL` | `deepseek-chat` | 模型名称（DeepSeek 官方用 `deepseek-chat`；腾讯云 lkeap 用 `deepseek-v3-0324`） |
+| `DEEPSEEK_MODEL` | `deepseek-chat` | 模型名称（DeepSeek 官方用 `deepseek-chat`；腾讯云 lkeap 用 `deepseek-v3.2`） |
 | `QWEN_API_KEY` | 空 | Qwen Flash（省钱） |
 | `QWEN_MODEL` | `qwen-flash` | Qwen 模型名 |
 | `QWEN_VL_MODEL` | `qwen-vl-max` | 视觉模型 |

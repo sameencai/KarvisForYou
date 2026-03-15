@@ -144,9 +144,9 @@
 | 平台 | BASE_URL | MODEL |
 |------|----------|-------|
 | DeepSeek 官方（推荐） | `https://api.deepseek.com/v1` | `deepseek-chat` |
-| 腾讯云 lkeap | `https://api.lkeap.cloud.tencent.com/v1` | `deepseek-v3-0324` |
+| 腾讯云 lkeap | `https://api.lkeap.cloud.tencent.com/v1` | `deepseek-v3.2` |
 
-**常见错误**：用腾讯云 lkeap 但模型名填了 `deepseek-chat`（这是官方的模型名），会报错。反之亦然。旧模型名 `deepseek-v3` 已下线，请使用 `deepseek-v3-0324`。
+**常见错误**：用腾讯云 lkeap 但模型名填了 `deepseek-chat`（这是官方的模型名），会报错。反之亦然。旧模型名 `deepseek-v3` 已下线，请使用 `deepseek-v3.2`。
 
 ### Q: 腾讯云 API Key 怎么获取？
 
