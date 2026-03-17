@@ -183,7 +183,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
        x-transition:leave="transition ease-in duration-150"
        x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
     <div class="absolute inset-0 bg-black/30"></div>
-    <div class="relative bg-white rounded-t-2xl w-full max-w-lg p-5 pb-8 z-10 modal-panel"
+    <div class="relative bg-white rounded-t-2xl w-full max-w-lg p-5 pb-8 z-10 modal-panel overflow-hidden"
          x-transition:enter="transition ease-out duration-250"
          x-transition:enter-start="transform translate-y-full opacity-0"
          x-transition:enter-end="transform translate-y-0 opacity-100"
@@ -200,16 +200,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
           <input x-model="editForm.content"
                  class="w-full text-sm border border-warm-200 rounded-lg px-3 py-2 focus:outline-none focus:border-warm-500 focus:ring-1 focus:ring-warm-300">
         </div>
-        <div class="flex gap-3">
-          <div class="flex-1">
+        <div class="grid grid-cols-2 gap-3">
+          <div class="min-w-0">
             <label class="text-xs text-warm-500 block mb-1">截止日期</label>
             <input x-model="editForm.due_date" type="date"
-                   class="w-full text-xs border border-warm-200 rounded-lg px-3 py-2 focus:outline-none focus:border-warm-500">
+                   class="w-full text-xs border border-warm-200 rounded-lg px-2 py-2 focus:outline-none focus:border-warm-500">
           </div>
-          <div class="flex-1">
+          <div class="min-w-0">
             <label class="text-xs text-warm-500 block mb-1">提醒时间</label>
             <input x-model="editForm.remind_at" type="time"
-                   class="w-full text-xs border border-warm-200 rounded-lg px-3 py-2 focus:outline-none focus:border-warm-500">
+                   class="w-full text-xs border border-warm-200 rounded-lg px-2 py-2 focus:outline-none focus:border-warm-500">
           </div>
         </div>
         <div class="flex gap-3 pt-2">
