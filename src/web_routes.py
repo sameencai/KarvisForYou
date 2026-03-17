@@ -614,6 +614,44 @@ def api_mood(user_id=None):
             "title": f.replace(".md", ""),
         })
 
+    # 回填修复：如果 scores 比 diaries 少很多，从日记文件中提取缺失的分数
+    scored_dates = {s.get("date") for s in scores}
+    missing = [d for d in diaries if d["date"] not in scored_dates]
+    if missing:
+        import re as _re
+        backfilled = 0
+        for d in missing:
+            try:
+                content = _read_file_safe(ctx, f"{ctx.emotion_notes_dir}/{d['file']}")
+                if not content:
+                    continue
+                # 匹配 **整体评分**：7/10 或 **整体评分**: 7/10
+                m = _re.search(r'\*\*整体评分\*\*[：:]\s*(\d+)\s*/\s*10', content)
+                if not m:
+                    continue
+                score = int(m.group(1))
+                # 提取情绪标签
+                lm = _re.search(r'\*\*情绪标签\*\*[：:]\s*(.+)', content)
+                label = lm.group(1).strip() if lm else ""
+                scores.append({
+                    "date": d["date"],
+                    "score": score,
+                    "label": label,
+                    "source": "backfill"
+                })
+                backfilled += 1
+            except Exception as e:
+                _log(f"[WebAPI] mood backfill error for {d['date']}: {e}")
+        if backfilled:
+            scores.sort(key=lambda s: s.get("date", ""))
+            # 写回 state 持久化
+            try:
+                state["mood_scores"] = scores
+                ctx.IO.write_json(ctx.state_file, state)
+                _log(f"[WebAPI] mood_scores 回填 {backfilled} 条，已写回 state")
+            except Exception as e:
+                _log(f"[WebAPI] mood_scores 回填写入失败: {e}")
+
     return jsonify({"scores": scores, "diaries": diaries})
 
 
