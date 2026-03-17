@@ -818,6 +818,29 @@ def process(payload, send_fn=None, ctx=None):
         add_message_to_state(state, "user", user_text)
         _update_nudge_state(state)
 
+    # 4.5 前置关键词拦截 — 短文本指令型消息直接路由，不经过 LLM
+    _shortcut = _keyword_shortcut(user_text, payload)
+    if _shortcut:
+        _log(f"[Brain] 关键词拦截命中: {_shortcut['skill']}, text={user_text[:40]}")
+        decision = _shortcut
+        # 跳过 LLM，直接进入 Skill 执行
+        registry = _get_skill_registry()
+        primary_skill = _get_primary_skill(decision)
+        reply = decision.get("reply", "")
+        steps, step_results = _execute_steps(decision, state, registry, ctx)
+        if step_results:
+            last = step_results[-1].get("result", {})
+            if isinstance(last, dict) and last.get("reply"):
+                reply = last["reply"]
+        if send_fn and reply:
+            try:
+                send_fn(reply)
+            except Exception as e:
+                _log(f"[Brain] 发送失败: {e}")
+        _save_state_and_memory(state, decision, payload=payload, reply=reply,
+                               elapsed=_time.time() - t_start, ctx=ctx)
+        return {"reply": reply}
+
     # 5. 构建 prompt 并调用 LLM（prompt_futs 在步骤 1 已提交，此处直接取结果）
     system_prompt = build_system_prompt(state, ctx, prompt_futs=prompt_futs, payload=payload)
     t_prompt = _time.time()
@@ -1403,6 +1426,32 @@ def _flash_filter_and_save(payload, state, ctx, primary_skill):
     except Exception as e:
         _log(f"[Brain][NoteFilter] Flash判断失败，兜底写入: {e}")
         _save_to_quick_notes(payload, state, ctx)
+
+
+def _keyword_shortcut(user_text, payload):
+    """
+    前置关键词拦截：对常见短文本指令直接路由到对应 Skill，跳过 LLM 调用。
+    返回 decision dict 或 None（不匹配时）。
+    仅匹配非 system 消息的纯文本。
+    """
+    if not user_text or payload.get("type") == "system":
+        return None
+    t = user_text.strip()
+
+    # web.token — 生成 Web 查看链接
+    _WEB_TOKEN_KEYWORDS = ("查看链接", "给我查看链接", "我要看我的数据", "看看我的笔记",
+                           "怎么查看数据", "怎么看笔记", "怎么看数据", "看我的数据",
+                           "给我链接", "数据查看链接", "web链接", "查看数据")
+    if t in _WEB_TOKEN_KEYWORDS or any(t == kw for kw in _WEB_TOKEN_KEYWORDS):
+        return {
+            "thinking": "用户要查看链接，直接调用 web.token",
+            "skill": "web.token",
+            "params": {},
+            "reply": "",
+            "memory_updates": []
+        }
+
+    return None
 
 
 def _extract_user_text(payload):
