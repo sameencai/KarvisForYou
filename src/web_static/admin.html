@@ -127,6 +127,97 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 
     <!-- ============ Tab: 系统操作 ============ -->
     <div x-show="activeTab==='system'" class="space-y-4">
+      <!-- 系统配置总览 -->
+      <div class="bg-white rounded-xl p-5 shadow-sm">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-base font-bold text-warm-800">🧠 模型路由 & 系统配置</h2>
+          <button @click="loadSystemConfig()" class="text-xs text-warm-500 hover:text-warm-700 bg-warm-100 px-3 py-1.5 rounded-lg transition">
+            🔄 刷新
+          </button>
+        </div>
+        <div x-show="!sysConfig" class="text-center py-6 text-warm-400 text-sm">加载中...</div>
+        <div x-show="sysConfig" class="space-y-4">
+          <!-- 模型配置卡片 -->
+          <div>
+            <h3 class="text-xs font-bold text-warm-600 mb-2">🤖 模型配置</h3>
+            <div class="grid md:grid-cols-2 gap-3">
+              <template x-for="(m, key) in (sysConfig?.models||{})" :key="key">
+                <div class="bg-warm-50 rounded-lg p-3 text-xs space-y-1.5">
+                  <div class="flex items-center justify-between">
+                    <span class="font-medium text-warm-800" x-text="m.label"></span>
+                    <span x-text="m.status" class="text-[10px]"></span>
+                  </div>
+                  <div class="text-warm-500"><span class="text-warm-400">厂商:</span> <span x-text="m.provider"></span></div>
+                  <div class="text-warm-500"><span class="text-warm-400">模型:</span> <span class="font-mono text-warm-700" x-text="m.model"></span></div>
+                  <div class="text-warm-500"><span class="text-warm-400">API Key:</span> <span class="font-mono" x-text="m.api_key"></span></div>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- 路由策略 -->
+          <div>
+            <h3 class="text-xs font-bold text-warm-600 mb-2">🔀 路由策略</h3>
+            <div class="bg-warm-50 rounded-lg p-3 text-xs space-y-1">
+              <div class="flex justify-between"><span class="text-warm-400">管理员 (Main/Think)</span><span class="text-warm-800 font-medium" x-text="sysConfig?.routing?.admin_model"></span></div>
+              <div class="flex justify-between"><span class="text-warm-400">普通用户 (Main/Think)</span><span class="text-warm-800 font-medium" x-text="sysConfig?.routing?.user_model"></span></div>
+              <div class="flex justify-between"><span class="text-warm-400">Flash (所有用户)</span><span class="text-warm-800 font-medium" x-text="sysConfig?.routing?.flash_model"></span></div>
+              <div class="flex justify-between"><span class="text-warm-400">Skill 内部调用</span><span class="text-warm-800 font-medium" x-text="sysConfig?.routing?.skill_internal"></span></div>
+            </div>
+          </div>
+
+          <!-- 运行参数 -->
+          <div class="grid md:grid-cols-3 gap-3">
+            <div>
+              <h3 class="text-xs font-bold text-warm-600 mb-2">⏰ 调度器</h3>
+              <div class="bg-warm-50 rounded-lg p-3 text-xs space-y-1">
+                <div class="flex justify-between"><span class="text-warm-400">心跳间隔</span><span class="text-warm-800" x-text="(sysConfig?.scheduler?.tick_minutes||0)+'min'"></span></div>
+                <div class="flex justify-between"><span class="text-warm-400">默认起床</span><span class="text-warm-800" x-text="sysConfig?.scheduler?.default_wake"></span></div>
+                <div class="flex justify-between"><span class="text-warm-400">默认入睡</span><span class="text-warm-800" x-text="sysConfig?.scheduler?.default_sleep"></span></div>
+                <div class="flex justify-between"><span class="text-warm-400">每日推送上限</span><span class="text-warm-800" x-text="sysConfig?.scheduler?.push_max_daily"></span></div>
+                <div class="flex justify-between"><span class="text-warm-400">推送最小间隔</span><span class="text-warm-800" x-text="sysConfig?.scheduler?.min_push_gap"></span></div>
+              </div>
+            </div>
+            <div>
+              <h3 class="text-xs font-bold text-warm-600 mb-2">💬 陪伴</h3>
+              <div class="bg-warm-50 rounded-lg p-3 text-xs space-y-1">
+                <div class="flex justify-between"><span class="text-warm-400">静默时长</span><span class="text-warm-800" x-text="(sysConfig?.companion?.silent_hours||0)+'h'"></span></div>
+                <div class="flex justify-between"><span class="text-warm-400">推送间隔</span><span class="text-warm-800" x-text="(sysConfig?.companion?.interval_hours||0)+'h'"></span></div>
+                <div class="flex justify-between"><span class="text-warm-400">每日上限</span><span class="text-warm-800" x-text="sysConfig?.companion?.max_daily"></span></div>
+              </div>
+            </div>
+            <div>
+              <h3 class="text-xs font-bold text-warm-600 mb-2">🚨 告警</h3>
+              <div class="bg-warm-50 rounded-lg p-3 text-xs space-y-1">
+                <div class="flex justify-between"><span class="text-warm-400">慢请求阈值</span><span class="text-warm-800" x-text="sysConfig?.alerts?.slow_threshold"></span></div>
+                <div class="flex justify-between"><span class="text-warm-400">连续次数触发</span><span class="text-warm-800" x-text="sysConfig?.alerts?.slow_consecutive"></span></div>
+                <div class="flex justify-between"><span class="text-warm-400">告警冷却</span><span class="text-warm-800" x-text="sysConfig?.alerts?.cooldown"></span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 渠道 & 系统 -->
+          <div class="grid md:grid-cols-2 gap-3">
+            <div>
+              <h3 class="text-xs font-bold text-warm-600 mb-2">📡 渠道</h3>
+              <div class="bg-warm-50 rounded-lg p-3 text-xs space-y-1">
+                <div class="flex justify-between"><span class="text-warm-400">活跃渠道</span><span class="text-warm-800 font-medium" x-text="(sysConfig?.channels?.active||[]).join(', ')"></span></div>
+                <div class="flex justify-between"><span class="text-warm-400">Telegram</span><span class="text-warm-800" x-text="sysConfig?.channels?.telegram"></span></div>
+              </div>
+            </div>
+            <div>
+              <h3 class="text-xs font-bold text-warm-600 mb-2">🖥️ 系统</h3>
+              <div class="bg-warm-50 rounded-lg p-3 text-xs space-y-1">
+                <div class="flex justify-between"><span class="text-warm-400">端口</span><span class="text-warm-800" x-text="sysConfig?.system?.server_port"></span></div>
+                <div class="flex justify-between"><span class="text-warm-400">管理员 ID</span><span class="text-warm-800 font-mono" x-text="sysConfig?.system?.admin_user_id"></span></div>
+                <div class="flex justify-between"><span class="text-warm-400">每日消息限额</span><span class="text-warm-800" x-text="sysConfig?.system?.daily_message_limit"></span></div>
+                <div class="flex justify-between"><span class="text-warm-400">不活跃阈值</span><span class="text-warm-800" x-text="(sysConfig?.system?.inactive_days_threshold||0)+'天'"></span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="bg-white rounded-xl p-5 shadow-sm">
         <h2 class="text-base font-bold text-warm-800 mb-4">⚙️ 系统操作面板</h2>
         <p class="text-xs text-warm-500 mb-4">手动触发定时任务或系统动作，谨慎操作。</p>
@@ -466,6 +557,8 @@ function adminApp() {
     userDetail: { open: false, uid: '', loading: false, data: null },
     // 系统操作
     sysAction: { action: 'refresh_cache', userId: '', running: false, result: '', resultOk: false, details: '' },
+    // 系统配置
+    sysConfig: null,
     // 邀请码
     inviteCodes: [],
     // 公告 & 反馈
@@ -495,6 +588,7 @@ function adminApp() {
         this.loadInviteCodes();
         this.loadAnnouncements();
         this.loadFeedbacks();
+        this.loadSystemConfig();
       } catch(e) { this.authError = '网络错误'; }
     },
     async init() {
@@ -614,6 +708,14 @@ function adminApp() {
     },
 
     // ---- 系统操作 ----
+    async loadSystemConfig() {
+      try {
+        const r = await this._fetch('/api/admin/system/config');
+        if (r.ok) {
+          this.sysConfig = await r.json();
+        }
+      } catch(e) { console.error('加载系统配置失败', e); }
+    },
     async triggerAction() {
       this.sysAction.running = true;
       this.sysAction.result = '';

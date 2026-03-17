@@ -13,9 +13,19 @@ tailwind.config = { theme: { extend: { colors: {
 </script>
 <style>
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fdf8f6; }
+/* 编辑弹窗过渡 */
+.modal-overlay { transition: opacity 0.2s ease; }
+.modal-panel { transition: transform 0.25s ease, opacity 0.2s ease; }
+/* 左滑删除 */
+.swipe-item { transition: transform 0.2s ease; }
+/* 添加框展开动画 */
+.add-panel-enter { animation: slideDown 0.25s ease forwards; }
+@keyframes slideDown { from { opacity:0; max-height:0; } to { opacity:1; max-height:200px; } }
 </style>
 </head>
 <body class="pb-20" x-data="todoApp()" x-init="load()">
+
+  <!-- Header -->
   <div class="bg-white border-b border-warm-100 px-4 py-3 flex items-center justify-between">
     <h1 class="text-lg font-bold text-warm-900">✅ 待办</h1>
     <div class="flex gap-2 text-xs">
@@ -25,17 +35,89 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     </div>
   </div>
 
+  <!-- ➕ 添加待办入口 -->
+  <div class="px-4 pt-3" x-show="filter!=='done'">
+    <div @click="showAdd = !showAdd"
+         class="flex items-center gap-2 text-warm-500 cursor-pointer hover:text-warm-700 transition py-2"
+         :class="showAdd ? 'text-warm-700' : ''">
+      <span class="w-6 h-6 rounded-full border-2 border-dashed border-warm-300 flex items-center justify-center text-xs"
+            :class="showAdd ? 'border-warm-500 bg-warm-50' : ''">＋</span>
+      <span class="text-sm">添加新待办...</span>
+    </div>
+    <!-- 展开的输入区 -->
+    <div x-show="showAdd" x-transition class="bg-white rounded-xl p-3 shadow-sm mt-1 space-y-2">
+      <input x-ref="addInput" x-model="newContent" @keydown.enter="addTodo()"
+             class="w-full text-sm border border-warm-200 rounded-lg px-3 py-2 focus:outline-none focus:border-warm-500 focus:ring-1 focus:ring-warm-300"
+             placeholder="输入待办内容…">
+      <div class="flex items-center gap-2">
+        <input x-model="newDueDate" type="date"
+               class="text-xs border border-warm-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-warm-500 flex-1"
+               placeholder="截止日期（可选）">
+        <button @click="addTodo()" :disabled="!newContent.trim() || addBusy"
+                class="bg-warm-700 text-white text-xs px-4 py-1.5 rounded-lg hover:bg-warm-800 disabled:opacity-40 transition shrink-0">
+          <span x-show="!addBusy">添加</span>
+          <span x-show="addBusy" class="animate-pulse">添加中…</span>
+        </button>
+        <button @click="showAdd=false; newContent=''; newDueDate=''"
+                class="text-warm-400 text-xs px-2 py-1.5 hover:text-warm-600 transition">取消</button>
+      </div>
+    </div>
+  </div>
+
   <div class="p-4 space-y-2" x-show="!loading">
-    <!-- 进行中 -->
-    <template x-if="filter!=='done'">
+
+    <!-- 🔁 每日习惯 -->
+    <template x-if="filter!=='done' && recurItems.length > 0">
       <div>
-        <p class="text-xs text-warm-500 mb-2 font-medium" x-show="pending.length">
-          进行中 (<span x-text="pending.length"></span>)
+        <p class="text-xs text-warm-500 mb-2 font-medium flex items-center gap-1">
+          🔁 每日习惯 (<span x-text="recurItems.length"></span>)
         </p>
-        <template x-for="(item,i) in pending" :key="item.content + '_' + i">
+        <template x-for="(item,i) in recurItems" :key="'r_'+item.id+i">
           <div class="bg-white rounded-xl p-3 shadow-sm flex items-center gap-2 mb-2 transition-all"
                :class="item._done ? 'opacity-40 scale-95' : ''">
-            <button @click="completeTodo(i, item)"
+            <!-- 打卡按钮 -->
+            <button @click="completeTodo(item)"
+                    class="shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center active:scale-90 transition-all"
+                    :class="item.checkin_today ? 'border-green-400 bg-green-50' : item._done ? 'border-green-400 bg-green-50' : 'border-warm-300 hover:border-warm-500'"
+                    :disabled="busy || item._done || item.checkin_today">
+              <span x-show="item._loading" class="text-xs animate-spin">⏳</span>
+              <span x-show="(item._done || item.checkin_today) && !item._loading" class="text-xs text-green-500">✓</span>
+              <span x-show="!item._loading && !item._done && !item.checkin_today" class="text-xs text-transparent hover:text-warm-400">✓</span>
+            </button>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm text-warm-800 truncate" x-text="item.content"></p>
+              <p x-show="item.remind_at" class="text-[11px] text-warm-400 mt-0.5">⏰ <span x-text="item.remind_at"></span></p>
+            </div>
+            <span x-show="item.checkin_today || item._done" class="text-xs text-green-600 whitespace-nowrap">✅已打卡</span>
+            <span x-show="!item.checkin_today && !item._done" class="text-[10px] text-warm-400">🔁</span>
+            <!-- 操作菜单 -->
+            <div class="relative" x-data="{open:false}">
+              <button @click.stop="open=!open" class="text-warm-400 hover:text-warm-600 p-1 -mr-1">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="4" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="16" r="1.5"/></svg>
+              </button>
+              <div x-show="open" @click.away="open=false" x-transition
+                   class="absolute right-0 top-7 bg-white rounded-lg shadow-lg border border-warm-100 py-1 z-20 w-24">
+                <button @click="openEdit(item); open=false" class="w-full text-left px-3 py-1.5 text-xs text-warm-700 hover:bg-warm-50">✏️ 编辑</button>
+                <button @click="deleteTodo(item); open=false" class="w-full text-left px-3 py-1.5 text-xs text-red-500 hover:bg-red-50">🗑️ 删除</button>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </template>
+
+    <!-- 📌 进行中 -->
+    <template x-if="filter!=='done' && oneTimeItems.length > 0">
+      <div>
+        <p class="text-xs text-warm-500 mb-2 font-medium flex items-center gap-1"
+           :class="recurItems.length ? 'mt-4' : ''">
+          📌 进行中 (<span x-text="oneTimeItems.length"></span>)
+        </p>
+        <template x-for="(item,i) in oneTimeItems" :key="'o_'+item.id+i">
+          <div class="bg-white rounded-xl p-3 shadow-sm flex items-center gap-2 mb-2 transition-all"
+               :class="item._done ? 'opacity-40 scale-95' : ''">
+            <!-- 完成按钮 -->
+            <button @click="completeTodo(item)"
                     class="shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center active:scale-90 transition-all"
                     :class="item._done ? 'border-green-400 bg-green-50' : 'border-warm-300 hover:border-warm-500'"
                     :disabled="busy || item._done">
@@ -43,36 +125,130 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
               <span x-show="item._done && !item._loading" class="text-xs text-green-500">✓</span>
               <span x-show="!item._loading && !item._done" class="text-xs text-transparent hover:text-warm-400">✓</span>
             </button>
-            <p class="text-sm flex-1" :class="item._done ? 'text-warm-400 line-through' : 'text-warm-800'" x-text="item.content"></p>
-            <span x-show="item._checkin" class="text-xs text-green-600 whitespace-nowrap">今日已打卡 🔁</span>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm" :class="item._done ? 'text-warm-400 line-through' : 'text-warm-800'" x-text="item.content"></p>
+              <div class="flex items-center gap-2 mt-0.5">
+                <p x-show="item.due_date" class="text-[11px] text-warm-400">📅 <span x-text="item.due_date"></span></p>
+                <p x-show="item.remind_at" class="text-[11px] text-warm-400">⏰ <span x-text="item.remind_at"></span></p>
+              </div>
+            </div>
+            <!-- 操作菜单 -->
+            <div class="relative" x-data="{open:false}">
+              <button @click.stop="open=!open" class="text-warm-400 hover:text-warm-600 p-1 -mr-1">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="4" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="16" r="1.5"/></svg>
+              </button>
+              <div x-show="open" @click.away="open=false" x-transition
+                   class="absolute right-0 top-7 bg-white rounded-lg shadow-lg border border-warm-100 py-1 z-20 w-24">
+                <button @click="openEdit(item); open=false" class="w-full text-left px-3 py-1.5 text-xs text-warm-700 hover:bg-warm-50">✏️ 编辑</button>
+                <button @click="deleteTodo(item); open=false" class="w-full text-left px-3 py-1.5 text-xs text-red-500 hover:bg-red-50">🗑️ 删除</button>
+              </div>
+            </div>
           </div>
         </template>
       </div>
     </template>
-    <!-- 已完成 -->
-    <template x-if="filter!=='pending'">
+
+    <!-- ✅ 已完成 -->
+    <template x-if="filter!=='pending' && done.length > 0">
       <div>
-        <p class="text-xs text-warm-500 mb-2 font-medium mt-4" x-show="done.length">
-          已完成 (<span x-text="done.length"></span>)
+        <p class="text-xs text-warm-500 mb-2 font-medium mt-4 flex items-center gap-1">
+          ✅ 已完成 (<span x-text="done.length"></span>)
         </p>
         <template x-for="(item,i) in done" :key="'d'+i">
-          <div class="bg-white rounded-xl p-3 shadow-sm flex items-start gap-2 opacity-60">
-            <span class="text-green-500 mt-0.5">✅</span>
+          <div class="bg-white rounded-xl p-3 shadow-sm flex items-start gap-2 opacity-50 mb-2">
+            <span class="text-green-500 mt-0.5 text-sm">✓</span>
             <p class="text-sm text-warm-600 flex-1 line-through" x-text="item.content"></p>
           </div>
         </template>
       </div>
     </template>
-    <div x-show="!pending.length && !done.length" class="text-center py-16">
+
+    <!-- 空状态 -->
+    <div x-show="!recurItems.length && !oneTimeItems.length && !done.length" class="text-center py-16">
       <p class="text-4xl mb-3">📋</p>
       <p class="text-warm-600 font-medium">还没有待办事项</p>
-      <p class="text-warm-400 text-sm mt-1">在企微告诉 Karvis 你要做的事就好</p>
+      <p class="text-warm-400 text-sm mt-1">点击上方「添加新待办」或在企微告诉 Karvis</p>
       <p class="text-warm-400 text-xs mt-3">💡 试试说：「提醒我明天买猫粮」</p>
     </div>
   </div>
 
   <div x-show="loading" class="flex items-center justify-center h-64">
     <p class="text-warm-400">加载中...</p>
+  </div>
+
+  <!-- ── 编辑弹窗 ── -->
+  <div x-show="editModal" class="fixed inset-0 z-50 flex items-end justify-center modal-overlay"
+       @click.self="editModal=false" x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
+    <div class="absolute inset-0 bg-black/30"></div>
+    <div class="relative bg-white rounded-t-2xl w-full max-w-lg p-5 pb-8 z-10 modal-panel"
+         x-transition:enter="transition ease-out duration-250"
+         x-transition:enter-start="transform translate-y-full opacity-0"
+         x-transition:enter-end="transform translate-y-0 opacity-100"
+         x-transition:leave="transition ease-in duration-200"
+         x-transition:leave-start="transform translate-y-0 opacity-100"
+         x-transition:leave-end="transform translate-y-full opacity-0">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-base font-bold text-warm-900">✏️ 编辑待办</h2>
+        <button @click="editModal=false" class="text-warm-400 hover:text-warm-600 text-xl">&times;</button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs text-warm-500 block mb-1">内容</label>
+          <input x-model="editForm.content"
+                 class="w-full text-sm border border-warm-200 rounded-lg px-3 py-2 focus:outline-none focus:border-warm-500 focus:ring-1 focus:ring-warm-300">
+        </div>
+        <div class="flex gap-3">
+          <div class="flex-1">
+            <label class="text-xs text-warm-500 block mb-1">截止日期</label>
+            <input x-model="editForm.due_date" type="date"
+                   class="w-full text-xs border border-warm-200 rounded-lg px-3 py-2 focus:outline-none focus:border-warm-500">
+          </div>
+          <div class="flex-1">
+            <label class="text-xs text-warm-500 block mb-1">提醒时间</label>
+            <input x-model="editForm.remind_at" type="time"
+                   class="w-full text-xs border border-warm-200 rounded-lg px-3 py-2 focus:outline-none focus:border-warm-500">
+          </div>
+        </div>
+        <div class="flex gap-3 pt-2">
+          <button @click="saveEdit()" :disabled="editBusy || !editForm.content.trim()"
+                  class="flex-1 bg-warm-700 text-white text-sm py-2.5 rounded-xl hover:bg-warm-800 disabled:opacity-40 transition">
+            <span x-show="!editBusy">保存修改</span>
+            <span x-show="editBusy" class="animate-pulse">保存中…</span>
+          </button>
+          <button @click="editModal=false"
+                  class="px-6 text-warm-500 text-sm py-2.5 rounded-xl hover:bg-warm-50 transition">取消</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 删除确认弹窗 ── -->
+  <div x-show="deleteModal" class="fixed inset-0 z-50 flex items-center justify-center"
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
+    <div class="absolute inset-0 bg-black/30" @click="deleteModal=false"></div>
+    <div class="relative bg-white rounded-2xl p-5 w-72 z-10 text-center shadow-xl"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="transform scale-95 opacity-0"
+         x-transition:enter-end="transform scale-100 opacity-100">
+      <p class="text-3xl mb-2">🗑️</p>
+      <p class="text-sm text-warm-800 font-medium mb-1">确定删除这条待办？</p>
+      <p class="text-xs text-warm-400 mb-4 truncate px-2" x-text="deleteTarget?.content"></p>
+      <div class="flex gap-3">
+        <button @click="deleteModal=false"
+                class="flex-1 text-sm py-2 rounded-xl bg-warm-100 text-warm-600 hover:bg-warm-200 transition">取消</button>
+        <button @click="confirmDelete()" :disabled="deleteBusy"
+                class="flex-1 text-sm py-2 rounded-xl bg-red-500 text-white hover:bg-red-600 disabled:opacity-40 transition">
+          <span x-show="!deleteBusy">删除</span>
+          <span x-show="deleteBusy" class="animate-pulse">删除中…</span>
+        </button>
+      </div>
+    </div>
   </div>
 
   <!-- Toast -->
@@ -89,46 +265,95 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
   </nav>
 
 <script>
-const API_HEADERS = () => ({'X-Token': localStorage.getItem('karvis_token')||''});
+const API_HEADERS = () => ({'X-Token': localStorage.getItem('karvis_token')||'', 'Content-Type': 'application/json'});
 function checkAuth() { if(!localStorage.getItem('karvis_token')) location.href='/web/login'; }
 
 function todoApp() {
   return {
+    // 数据
     pending: [], done: [], loading: true, filter: 'all', busy: false, toast: '',
+    // 添加
+    showAdd: false, newContent: '', newDueDate: '', addBusy: false,
+    // 编辑
+    editModal: false, editBusy: false,
+    editForm: { content: '', due_date: '', remind_at: '' },
+    editTarget: null,
+    // 删除
+    deleteModal: false, deleteBusy: false, deleteTarget: null,
+
+    // ── 计算属性：按类型分组 ──
+    get recurItems() {
+      return this.pending.filter(p => p.recur);
+    },
+    get oneTimeItems() {
+      return this.pending.filter(p => !p.recur);
+    },
+
+    // ── 加载 ──
     async load() {
       checkAuth();
       try {
         const r = await fetch('/api/todos', {headers: API_HEADERS()});
         if (r.status === 401) { localStorage.removeItem('karvis_token'); location.href='/web/login'; return; }
         const d = await r.json();
-        this.pending = (d.pending || []).map(p => ({...p, _loading: false, _done: false, _checkin: false}));
+        this.pending = (d.pending || []).map(p => ({...p, _loading: false, _done: false}));
         this.done = d.done || [];
       } catch(e) { console.error(e); }
       this.loading = false;
     },
-    async completeTodo(idx, item) {
-      if (this.busy || item._done || item._loading) return;
+
+    // ── 添加待办 ──
+    async addTodo() {
+      const content = this.newContent.trim();
+      if (!content || this.addBusy) return;
+      this.addBusy = true;
+      try {
+        const body = { content };
+        if (this.newDueDate) body.due_date = this.newDueDate;
+        const res = await fetch('/api/todos', {
+          method: 'POST', headers: API_HEADERS(), body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (data.ok) {
+          this.showToast('添加成功 ✅');
+          this.newContent = '';
+          this.newDueDate = '';
+          this.showAdd = false;
+          await this.load(); // 刷新列表
+        } else {
+          this.showToast(data.reply || data.error || '添加失败');
+        }
+      } catch(e) {
+        console.error(e);
+        this.showToast('网络错误');
+      } finally {
+        this.addBusy = false;
+      }
+    },
+
+    // ── 完成 / 打卡 ──
+    async completeTodo(item) {
+      if (this.busy || item._done || item._loading || item.checkin_today) return;
       this.busy = true;
       item._loading = true;
       try {
         const res = await fetch('/api/todos/complete', {
-          method: 'POST',
-          headers: {...API_HEADERS(), 'Content-Type': 'application/json'},
+          method: 'POST', headers: API_HEADERS(),
           body: JSON.stringify({keyword: item.content})
         });
         const data = await res.json();
         if (data.ok) {
           if (data.reply && data.reply.includes('🔁')) {
-            item._checkin = true;
+            item.checkin_today = true;
             item._loading = false;
             this.showToast('打卡成功 ✅🔁');
           } else {
             item._done = true;
             item._loading = false;
             setTimeout(() => {
-              const i = this.pending.indexOf(item);
-              if (i >= 0) {
-                this.pending.splice(i, 1);
+              const idx = this.pending.indexOf(item);
+              if (idx >= 0) {
+                this.pending.splice(idx, 1);
                 this.done.unshift({content: item.content, done: true});
               }
             }, 600);
@@ -145,6 +370,74 @@ function todoApp() {
         this.busy = false;
       }
     },
+
+    // ── 编辑 ──
+    openEdit(item) {
+      this.editTarget = item;
+      this.editForm = {
+        content: item.content,
+        due_date: item.due_date || '',
+        remind_at: item.remind_at || '',
+      };
+      this.editModal = true;
+    },
+    async saveEdit() {
+      if (this.editBusy || !this.editForm.content.trim()) return;
+      this.editBusy = true;
+      try {
+        const body = { keyword: this.editTarget.content };
+        if (this.editForm.content !== this.editTarget.content) body.new_content = this.editForm.content;
+        if (this.editForm.due_date !== (this.editTarget.due_date||'')) body.new_due_date = this.editForm.due_date;
+        if (this.editForm.remind_at !== (this.editTarget.remind_at||'')) body.new_remind_at = this.editForm.remind_at;
+
+        const res = await fetch('/api/todos', {
+          method: 'PUT', headers: API_HEADERS(), body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (data.ok) {
+          this.showToast('修改成功 ✏️');
+          this.editModal = false;
+          await this.load();
+        } else {
+          this.showToast(data.reply || data.error || '修改失败');
+        }
+      } catch(e) {
+        console.error(e);
+        this.showToast('网络错误');
+      } finally {
+        this.editBusy = false;
+      }
+    },
+
+    // ── 删除 ──
+    deleteTodo(item) {
+      this.deleteTarget = item;
+      this.deleteModal = true;
+    },
+    async confirmDelete() {
+      if (this.deleteBusy || !this.deleteTarget) return;
+      this.deleteBusy = true;
+      try {
+        const res = await fetch('/api/todos', {
+          method: 'DELETE', headers: API_HEADERS(),
+          body: JSON.stringify({keyword: this.deleteTarget.content})
+        });
+        const data = await res.json();
+        if (data.ok) {
+          this.showToast('已删除 🗑️');
+          this.deleteModal = false;
+          await this.load();
+        } else {
+          this.showToast(data.reply || data.error || '删除失败');
+        }
+      } catch(e) {
+        console.error(e);
+        this.showToast('网络错误');
+      } finally {
+        this.deleteBusy = false;
+      }
+    },
+
     showToast(msg) {
       this.toast = msg;
       setTimeout(() => this.toast = '', 3000);

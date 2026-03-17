@@ -9,7 +9,13 @@ import os
 # ============ DeepSeek API (Tier 2/3: Main + Think) ============
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v3.2")
+
+# ============ Claude API (管理员专属 Main + Think) ============
+# 使用 OpenAI 兼容格式的代理服务
+CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY", "")
+CLAUDE_BASE_URL = os.environ.get("CLAUDE_BASE_URL", "https://api.mcxhm.cn")
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
 
 # ============ Qwen Flash API (Tier 1: Flash) ============
 QWEN_API_KEY = os.environ.get("QWEN_API_KEY", "")

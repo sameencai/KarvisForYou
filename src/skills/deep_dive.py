@@ -40,7 +40,7 @@ def dive(params, state, ctx):
     """
     topic = params.get("topic", "")
     keywords = params.get("keywords", [])
-    save = params.get("save", False)
+    save = params.get("save", True)  # 默认保存报告到文件
 
     if not topic:
         return {"success": False, "reply": "想深潜什么话题呢？告诉我你想回顾的内容~"}
@@ -129,15 +129,15 @@ def _collect_data(keywords, state, ctx):
             continue
         if k.startswith("emotion_"):
             date = k.replace("emotion_", "")
-            entries = _search_in_text(v, keyword_lower, f"情感日记({date})")
+            entries = _search_in_text(v, keyword_lower, f"情感日记({date})", date)
             matched_entries.extend(entries)
         elif k.startswith("work_"):
             date = k.replace("work_", "")
-            entries = _search_in_text(v, keyword_lower, f"工作笔记({date})")
+            entries = _search_in_text(v, keyword_lower, f"工作笔记({date})", date)
             matched_entries.extend(entries)
         elif k.startswith("fun_"):
             date = k.replace("fun_", "")
-            entries = _search_in_text(v, keyword_lower, f"生活趣事({date})")
+            entries = _search_in_text(v, keyword_lower, f"生活趣事({date})", date)
             matched_entries.extend(entries)
 
     # Memory.md
@@ -168,9 +168,16 @@ def _collect_data(keywords, state, ctx):
 
     has_data = bool(matched_entries) or bool(memory_relevant) or bool(decision_entries)
 
+    # 按日期降序排序，确保最新条目优先送入 LLM
+    def _sort_key(e):
+        d = e.get("date", "") or ""
+        t = e.get("time", "") or ""
+        return f"{d} {t}"
+    matched_entries.sort(key=_sort_key, reverse=True)
+
     return {
         "has_data": has_data,
-        "matched_entries": matched_entries[-50:],  # 最多 50 条，按时间逆序取最新
+        "matched_entries": matched_entries[:50],  # 最多 50 条，最新优先
         "memory_relevant": memory_relevant[:1000],
         "decision_entries": decision_entries[-10:],
         "mood_scores": mood_scores[-30:],  # 最近 30 天评分
@@ -201,7 +208,7 @@ def _search_in_quick_notes(text, keywords):
     return entries
 
 
-def _search_in_text(text, keywords, source):
+def _search_in_text(text, keywords, source, date=""):
     """从普通文本中搜索包含关键词的段落"""
     entries = []
     # 按段落分割
@@ -211,7 +218,7 @@ def _search_in_text(text, keywords, source):
         if any(kw in para_lower for kw in keywords):
             entries.append({
                 "source": source,
-                "date": "",
+                "date": date,
                 "time": "",
                 "content": para.strip()[:200]
             })

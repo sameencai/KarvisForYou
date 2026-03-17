@@ -20,6 +20,7 @@ except ImportError:
 
 from config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,
+    CLAUDE_API_KEY, CLAUDE_BASE_URL, CLAUDE_MODEL,
     QWEN_API_KEY, QWEN_BASE_URL, QWEN_MODEL, QWEN_VL_MODEL,
     CHECKIN_TIMEOUT_SECONDS, SCHEDULER_RHYTHM_WINDOW,
     ADMIN_USER_ID, ALERT_SLOW_THRESHOLD, ALERT_SLOW_CONSECUTIVE,
@@ -146,7 +147,10 @@ def _check_monthly_budget():
                     m = e.get("model", "").lower()
                     pt = e.get("prompt_tokens", 0)
                     ct = e.get("completion_tokens", 0)
-                    if "deepseek" in m:
+                    if "claude" in m:
+                        # Claude Sonnet: $3/M input, $15/M output → 约 ¥21/M, ¥105/M
+                        month_cost += pt / 1e6 * 21 + ct / 1e6 * 105
+                    elif "deepseek" in m:
                         month_cost += pt / 1e6 * 2 + ct / 1e6 * 8
                     elif "vl" in m:
                         month_cost += pt / 1e6 * 3 + ct / 1e6 * 9
@@ -277,19 +281,27 @@ def _select_skill_model_tier(skill_name):
 
 
 def call_llm(messages, model_tier="main", max_tokens=500,
-             temperature=0.3, enable_thinking=None):
+             temperature=0.3, enable_thinking=None, ctx=None):
     """
-    统一 LLM 调用入口，支持三层模型路由 + 自动降级。
+    统一 LLM 调用入口，支持三层模型路由 + 管理员专属 Claude + 自动降级。
     
     Args:
         model_tier: "flash" | "main" | "think"
         enable_thinking: 覆盖 thinking 设置。None = 按 tier 自动决定
+        ctx: UserContext, 用于判断是否走管理员 Claude 路由
     Returns:
         str: LLM 回复文本，失败返回 None
     """
+    # 管理员模型路由：管理员 + 配置了 Claude Key + 非 flash tier → 走 Claude
+    use_claude = (ctx and ctx.is_admin and CLAUDE_API_KEY
+                  and model_tier in ("main", "think"))
+
     try:
         if model_tier == "flash":
             return _call_qwen_flash(messages, max_tokens, temperature)
+
+        if use_claude:
+            return _call_claude(messages, max_tokens, temperature)
 
         thinking = enable_thinking
         if thinking is None:
@@ -306,16 +318,22 @@ def call_llm(messages, model_tier="main", max_tokens=500,
             except Exception as e2:
                 _log(f"[Brain] DeepSeek 降级也失败: {e2}")
                 return None
+        if use_claude:
+            _log(f"[Brain] Claude 失败: {e}, 降级到 DeepSeek")
+            try:
+                thinking = enable_thinking if enable_thinking is not None else (model_tier == "think")
+                return _call_deepseek(messages, max_tokens, temperature,
+                                      enable_thinking=thinking)
+            except Exception as e2:
+                _log(f"[Brain] DeepSeek 降级也失败: {e2}")
+                return None
         _log(f"[Brain] LLM 调用失败 (tier={model_tier}): {e}")
         return None
 
 
 def _call_deepseek(messages, max_tokens=500, temperature=0.3,
                    enable_thinking=False):
-    """调用 DeepSeek，支持 thinking 模式控制
-    腾讯云 lkeap: model=deepseek-v3.2
-    DeepSeek 官方: model=deepseek-chat
-    """
+    """调用 DeepSeek V3.2，支持 thinking 模式控制"""
     url = f"{DEEPSEEK_BASE_URL}/chat/completions"
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
@@ -327,8 +345,8 @@ def _call_deepseek(messages, max_tokens=500, temperature=0.3,
         "max_tokens": max_tokens,
         "temperature": temperature
     }
-    # DeepSeek 官方 API 支持 enable_thinking 参数；腾讯云兼容接口会忽略未知参数
-    if "deepseek" in DEEPSEEK_MODEL.lower():
+    # V3.2 支持 thinking 模式控制
+    if "v3.2" in DEEPSEEK_MODEL:
         data["enable_thinking"] = enable_thinking
 
     total_chars = sum(len(m.get("content", "")) for m in messages)
@@ -352,6 +370,49 @@ def _call_deepseek(messages, max_tokens=500, temperature=0.3,
 
     _log(f"[Brain][{tier_label}] DeepSeek API 错误: {resp.status_code} - {resp.text[:200]}")
     raise RuntimeError(f"DeepSeek API {resp.status_code}")
+
+
+def _call_claude(messages, max_tokens=500, temperature=0.3):
+    """调用 Claude（管理员专属），通过 OpenAI 兼容 API 代理"""
+    url = f"{CLAUDE_BASE_URL}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {CLAUDE_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    # OpenAI 兼容格式：直接传 messages（system 不用单独处理）
+    data = {
+        "model": CLAUDE_MODEL,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+
+    total_chars = sum(len(m.get("content", "")) for m in messages)
+    _log(f"[Brain][Claude] 请求: model={CLAUDE_MODEL}, "
+         f"prompt_chars={total_chars}, max_tokens={max_tokens}")
+
+    t0 = _time.time()
+    resp = requests.post(url, headers=headers, json=data, timeout=120)
+    t1 = _time.time()
+
+    if resp.status_code == 200:
+        result = resp.json()
+        usage = result.get("usage", {})
+        # OpenAI 兼容格式：choices[0].message.content
+        reply_text = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        _log(f"[Brain][Claude] 响应: {t1-t0:.1f}s, "
+             f"prompt_tokens={usage.get('prompt_tokens')}, "
+             f"completion_tokens={usage.get('completion_tokens')}")
+        _log_llm_usage("claude", CLAUDE_MODEL, {
+            "prompt_tokens": usage.get("prompt_tokens", 0),
+            "completion_tokens": usage.get("completion_tokens", 0),
+            "total_tokens": usage.get("total_tokens", 0),
+        }, t1 - t0)
+        return reply_text
+
+    _log(f"[Brain][Claude] API 错误: {resp.status_code} - {resp.text[:200]}")
+    raise RuntimeError(f"Claude API {resp.status_code}")
 
 
 def _call_qwen_flash(messages, max_tokens=500, temperature=0.3):
@@ -766,12 +827,14 @@ def process(payload, send_fn=None, ctx=None):
     is_system = payload.get("type") == "system"
     action = payload.get("action", "") if is_system else None
     model_tier = _select_model_tier(payload, is_system_action=is_system, action=action)
-    _log(f"[Brain] 模型路由: tier={model_tier}, is_system={is_system}, action={action}")
+    use_claude = ctx and ctx.is_admin and CLAUDE_API_KEY and model_tier in ("main", "think")
+    _log(f"[Brain] 模型路由: tier={model_tier}, is_system={is_system}, action={action}"
+         f"{', model=Claude' if use_claude else ', model=DeepSeek'}")
 
     llm_response = call_llm([
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message}
-    ], model_tier=model_tier)
+    ], model_tier=model_tier, ctx=ctx)
     t_llm = _time.time()
     _log(f"[Brain][耗时] LLM调用({model_tier}): {t_llm - t_prompt:.1f}s")
 
@@ -1029,7 +1092,7 @@ def _run_agent_loop(system_prompt, user_message, first_decision, first_context, 
         _log(f"[Brain][AgentLoop] 第 {step} 轮")
 
         # Agent Loop 中走 Main（后续可按 skill 动态选择 tier）
-        llm_response = call_llm(messages, model_tier="main", max_tokens=500, temperature=0.3)
+        llm_response = call_llm(messages, model_tier="main", max_tokens=500, temperature=0.3, ctx=ctx)
         if not llm_response:
             _log(f"[Brain][AgentLoop] LLM 返回空，终止循环")
             break
@@ -1092,6 +1155,7 @@ def _run_agent_loop(system_prompt, user_message, first_decision, first_context, 
 # ── V4: 不需要 Flash 加工的简单 skill ──
 _SIMPLE_SKILLS = frozenset({
     "note.save", "classify.archive", "todo.add", "todo.done",
+    "todo.list", "todo.edit", "todo.delete", "todo.remind_cancel",
     "checkin.start", "checkin.answer", "checkin.skip", "checkin.cancel",
     "book.create", "book.excerpt", "book.thought", "book.summary", "book.quotes",
     "media.create", "media.thought",
@@ -1101,6 +1165,7 @@ _SIMPLE_SKILLS = frozenset({
     "habit.propose", "habit.nudge", "habit.status", "habit.complete",
     "decision.record", "dynamic",
     "reflect.push", "reflect.answer", "reflect.skip", "reflect.history",
+    "deep.dive",
 })
 
 # ── 速记智能过滤：规则预筛跳过集合（V-Web-01）──

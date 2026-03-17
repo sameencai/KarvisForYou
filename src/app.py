@@ -947,6 +947,23 @@ def _run_system_action_for_user(action, data, uid, ctx):
         _log(f"[system_action] todo_remind 完成, user={uid}, 耗时={time.time()-t0:.1f}s")
         return {"ok": True, "sent": len(messages)}
 
+    if action == "precise_remind":
+        from skills.todo_manage import check_precise_reminders
+        state = read_state_cached(ctx) or {}
+        result = check_precise_reminders(state, ctx=ctx, todo_file=ctx.todo_file)
+        messages = result.get("messages", [])
+        state_updates = result.get("state_updates", {})
+        if messages:
+            combined = "\n".join(messages)
+            channel_router.send_message(uid, combined)
+        if state_updates:
+            for k, v in state_updates.items():
+                state[k] = v
+            write_state_and_update_cache(state, ctx)
+        if messages:
+            _log(f"[system_action] precise_remind: 推送 {len(messages)} 条, user={uid}")
+        return {"ok": True, "sent": len(messages)}
+
     if action in ("morning_report", "evening_checkin", "daily_report"):
         context = {}
         try:
@@ -1860,33 +1877,40 @@ def _scheduler_tick(uid, ctx):
     if len(ready) > 1:
         ready = _try_merge_intents(ready)
 
+    # V8-fix: 先标记 intents 状态并持久化，再执行子 action，避免竞态覆盖
     executed = 0
     for intent in ready:
         if push_count + executed >= SCHEDULER_PUSH_MAX_DAILY:
             break
-        try:
-            _execute_intent(intent, uid)
-            intent["status"] = "sent"
-            intent["_sent_at"] = now_str
-            executed += 1
-        except Exception as e:
-            _log(f"[V8][{uid}] 意图执行失败 {intent['type']}: {e}")
-            intent["_error"] = str(e)
+        intent["status"] = "sent"
+        intent["_sent_at"] = now_str
+        intent["sent_count"] = intent.get("sent_count", 0) + 1
+        executed += 1
 
     sched["_push_count_today"] = push_count + executed
     if executed > 0:
         sched["_last_push_time"] = now_str
+    write_state_and_update_cache(state, ctx)
+    _log(f"[V8][{uid}] 已持久化 {executed} 个意图状态，开始执行子 action")
 
-    # 重新读取最新 state，避免覆盖子 action（如 todo_remind）的 state 更新
-    if executed > 0:
+    # 实际执行子 action（此时子 action 读到的 state 已包含最新 intents 状态）
+    exec_ok = 0
+    for intent in ready[:executed]:
+        try:
+            _execute_intent(intent, uid)
+            exec_ok += 1
+        except Exception as e:
+            _log(f"[V8][{uid}] 意图执行失败 {intent['type']}: {e}")
+            intent["_error"] = str(e)
+
+    # 执行完子 action 后，重新读取 state 合并子 action 的非 scheduler 变更
+    if exec_ok > 0:
         fresh_state = ctx.IO.read_json(ctx.state_file) or {}
         fresh_sched = fresh_state.setdefault("scheduler", {})
         fresh_sched["intents"] = sched["intents"]
         fresh_sched["_push_count_today"] = sched["_push_count_today"]
         fresh_sched["_last_push_time"] = sched.get("_last_push_time")
         write_state_and_update_cache(fresh_state, ctx)
-    else:
-        write_state_and_update_cache(state, ctx)
     _log(f"[V8][{uid}] tick 完成: 评估 {len(pending)}, 执行 {executed}")
     return {"evaluated": len(pending), "executed": executed}
 
@@ -2069,6 +2093,9 @@ def _setup_builtin_scheduler():
         ("weekly_review",   {"trigger": "cron", "day_of_week": "sun", "hour": 21, "minute": 30}),
         ("monthly_review",  {"trigger": "cron", "day": "last", "hour": 22, "minute": 0}),
         ("finance_monthly_report", {"trigger": "cron", "day": 8, "hour": 20, "minute": 0}),
+
+        # 精准提醒：每分钟检查到期提醒（独立于意图系统）
+        ("precise_remind",  {"trigger": "cron", "minute": "*/1"}),
 
         # V8 新增：智能调度心跳
         ("scheduler_tick",  {"trigger": "interval", "minutes": SCHEDULER_TICK_MINUTES}),

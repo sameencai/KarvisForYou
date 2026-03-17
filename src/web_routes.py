@@ -266,18 +266,47 @@ def api_notes(user_id=None):
 @api_bp.route("/todos", methods=["GET"])
 @require_auth
 def api_todos(user_id=None):
-    """GET /api/todos — 获取待办"""
+    """GET /api/todos — 获取待办（含完整字段）"""
     ctx = _get_ctx(user_id)
+    state = _read_state_safe(ctx)
+    todos = state.get("todos", [])
+    today = datetime.now(_BEIJING_TZ).strftime("%Y-%m-%d")
 
-    todo = _read_file_safe(ctx, ctx.todo_file)
+    todo_text = _read_file_safe(ctx, ctx.todo_file)
     from skills.todo_manage import _parse_todo_md
-    doing, done_list = _parse_todo_md(todo)
+    doing, done_list = _parse_todo_md(todo_text)
 
-    pending = [{"content": d["content"], "done": False} for d in doing if d["raw"].strip().startswith("- [ ]")]
-    done = ([{"content": d["content"], "done": True} for d in doing if d["raw"].strip().startswith("- [x]")]
-            + [{"content": d["content"], "done": True} for d in done_list])
+    # ── 构建 pending 列表（保留 state 中的丰富字段） ──
+    def _enrich(item, idx):
+        """将 Todo.md 行 + state todo 合并为完整前端对象"""
+        from skills.todo_manage import _find_todo_by_content
+        t = _find_todo_by_content(todos, item["content"])
+        rec = {
+            "index": idx,
+            "content": item["content"],
+            "done": False,
+        }
+        if t:
+            rec["id"] = t.get("id", "")
+            rec["due_date"] = t.get("due_date", "")
+            rec["remind_at"] = t.get("remind_at", "")
+            rec["recur"] = t.get("recur", "")
+            rec["recur_spec"] = t.get("recur_spec", {})
+            rec["created"] = t.get("created", "")
+            rec["last_completed"] = t.get("last_completed", "")
+            rec["checkin_today"] = (t.get("recur") and t.get("last_completed") == today)
+        return rec
 
-    return jsonify({"pending": pending, "done": done})
+    pending = [_enrich(d, i) for i, d in enumerate(doing) if d["raw"].strip().startswith("- [ ]")]
+    # 循环待办今日已打卡也算 pending（打卡态）
+    checkin = [_enrich(d, i) for i, d in enumerate(doing) if d["raw"].strip().startswith("- [x]")]
+    for c in checkin:
+        c["done"] = False
+        c["checkin_today"] = True
+
+    done = [{"content": d["content"], "done": True} for d in done_list]
+
+    return jsonify({"pending": pending + checkin, "done": done})
 
 
 @api_bp.route("/todos/complete", methods=["POST"])
@@ -314,6 +343,126 @@ def api_todo_complete(user_id=None):
         "ok": result.get("success", False),
         "reply": result.get("reply", ""),
     })
+
+
+@api_bp.route("/todos", methods=["POST"])
+@require_auth
+def api_todo_add(user_id=None):
+    """POST /api/todos — 添加待办"""
+    ctx = _get_ctx(user_id)
+    data = request.get_json(force=True, silent=True) or {}
+    content = (data.get("content") or "").strip()
+    if not content:
+        return jsonify({"ok": False, "error": "待办内容不能为空"}), 400
+
+    from skills.todo_manage import add as todo_add
+    state = _read_state_safe(ctx)
+
+    params = {"content": content}
+    if data.get("due_date"):
+        params["due_date"] = data["due_date"]
+    if data.get("remind_at"):
+        params["remind_at"] = data["remind_at"]
+    if data.get("recur"):
+        params["recur"] = data["recur"]
+    if data.get("recur_spec"):
+        params["recur_spec"] = data["recur_spec"]
+
+    result = todo_add(params, state, ctx)
+
+    if result.get("state_updates"):
+        state.update(result["state_updates"])
+        try:
+            ctx.IO.write_json(ctx.state_file, state)
+        except Exception as e:
+            _log(f"[WebAPI] 写入 state 失败: {e}")
+
+    return jsonify({
+        "ok": result.get("success", False),
+        "reply": result.get("reply", ""),
+    })
+
+
+@api_bp.route("/todos", methods=["PUT"])
+@require_auth
+def api_todo_edit(user_id=None):
+    """PUT /api/todos — 编辑待办"""
+    ctx = _get_ctx(user_id)
+    data = request.get_json(force=True, silent=True) or {}
+
+    keyword = (data.get("keyword") or "").strip()
+    index = data.get("index")  # 前端传 0-based
+
+    if not keyword and index is None:
+        return jsonify({"ok": False, "error": "缺少 keyword 或 index"}), 400
+
+    from skills.todo_manage import edit as todo_edit
+    state = _read_state_safe(ctx)
+
+    params = {}
+    if index is not None:
+        params["index"] = int(index) + 1  # 转为 1-based
+    if keyword:
+        params["keyword"] = keyword
+
+    # 转发可选修改字段
+    for field in ("new_content", "new_due_date", "new_remind_at", "new_recur", "new_recur_spec"):
+        if field in data:
+            params[field] = data[field]
+
+    result = todo_edit(params, state, ctx)
+
+    if result.get("state_updates"):
+        state.update(result["state_updates"])
+        try:
+            ctx.IO.write_json(ctx.state_file, state)
+        except Exception as e:
+            _log(f"[WebAPI] 写入 state 失败: {e}")
+
+    return jsonify({
+        "ok": result.get("success", False),
+        "reply": result.get("reply", ""),
+    })
+
+
+@api_bp.route("/todos", methods=["DELETE"])
+@require_auth
+def api_todo_delete(user_id=None):
+    """DELETE /api/todos — 删除待办"""
+    ctx = _get_ctx(user_id)
+    data = request.get_json(force=True, silent=True) or {}
+
+    keyword = (data.get("keyword") or "").strip()
+    index = data.get("index")  # 前端传 0-based
+
+    if not keyword and index is None:
+        return jsonify({"ok": False, "error": "缺少 keyword 或 index"}), 400
+
+    from skills.todo_manage import delete as todo_delete
+    state = _read_state_safe(ctx)
+
+    params = {}
+    if index is not None:
+        params["indices"] = str(int(index) + 1)  # 转为 1-based
+    if keyword:
+        params["keyword"] = keyword
+
+    result = todo_delete(params, state, ctx)
+
+    if result.get("state_updates"):
+        state.update(result["state_updates"])
+        try:
+            ctx.IO.write_json(ctx.state_file, state)
+        except Exception as e:
+            _log(f"[WebAPI] 写入 state 失败: {e}")
+
+    return jsonify({
+        "ok": result.get("success", False),
+        "reply": result.get("reply", ""),
+    })
+
+
+@api_bp.route("/daily", methods=["GET"])
 @require_auth
 def api_daily_list(user_id=None):
     """GET /api/daily — 获取日记/周报/月报列表"""
@@ -1293,6 +1442,104 @@ def api_admin_update_user_config(uid):
     ctx.save_user_config(config)
     _log(f"[WebAPI] 管理员更新用户配置: uid={uid}, keys={list(data.keys())}")
     return jsonify({"ok": True, "user_id": uid, "config": config})
+
+
+@api_bp.route("/admin/system/config", methods=["GET"])
+@require_admin
+def api_admin_system_config():
+    """GET /api/admin/system/config — 系统配置总览（模型路由、运行参数等）"""
+    from config import (
+        DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,
+        CLAUDE_API_KEY, CLAUDE_BASE_URL, CLAUDE_MODEL,
+        QWEN_API_KEY, QWEN_BASE_URL, QWEN_MODEL, QWEN_VL_MODEL,
+        ADMIN_USER_ID, SERVER_PORT, ACTIVE_CHANNELS,
+        SCHEDULER_TICK_MINUTES, SCHEDULER_DEFAULT_WAKE, SCHEDULER_DEFAULT_SLEEP,
+        SCHEDULER_PUSH_MAX_DAILY, SCHEDULER_MIN_PUSH_GAP,
+        COMPANION_SILENT_HOURS, COMPANION_INTERVAL_HOURS, COMPANION_MAX_DAILY,
+        ALERT_SLOW_THRESHOLD, ALERT_SLOW_CONSECUTIVE, ALERT_COOLDOWN_SECONDS,
+        TELEGRAM_BOT_TOKEN, TELEGRAM_API_BASE,
+    )
+    from user_context import DAILY_MESSAGE_LIMIT, INACTIVE_DAYS_THRESHOLD
+
+    def _mask(key):
+        """脱敏 API Key，只显示前8位和后4位"""
+        if not key:
+            return "❌ 未配置"
+        if len(key) <= 16:
+            return key[:4] + "****"
+        return key[:8] + "****" + key[-4:]
+
+    config = {
+        "models": {
+            "main": {
+                "label": "Main / Think",
+                "provider": "DeepSeek",
+                "model": DEEPSEEK_MODEL,
+                "base_url": DEEPSEEK_BASE_URL,
+                "api_key": _mask(DEEPSEEK_API_KEY),
+                "status": "✅" if DEEPSEEK_API_KEY else "❌",
+            },
+            "flash": {
+                "label": "Flash",
+                "provider": "Qwen (阿里百炼)",
+                "model": QWEN_MODEL,
+                "base_url": QWEN_BASE_URL,
+                "api_key": _mask(QWEN_API_KEY),
+                "status": "✅" if QWEN_API_KEY else "❌",
+            },
+            "vl": {
+                "label": "视觉理解 (VL)",
+                "provider": "Qwen VL",
+                "model": QWEN_VL_MODEL,
+                "base_url": QWEN_BASE_URL,
+                "api_key": _mask(QWEN_API_KEY),
+                "status": "✅" if QWEN_API_KEY else "❌",
+            },
+            "claude": {
+                "label": "管理员专属",
+                "provider": "Anthropic Claude",
+                "model": CLAUDE_MODEL,
+                "base_url": CLAUDE_BASE_URL,
+                "api_key": _mask(CLAUDE_API_KEY),
+                "status": "✅" if CLAUDE_API_KEY else "❌ 未配置（管理员走 DeepSeek）",
+            },
+        },
+        "routing": {
+            "admin_model": "Claude" if CLAUDE_API_KEY else "DeepSeek (Claude 未配置)",
+            "user_model": "DeepSeek",
+            "flash_model": "Qwen Flash",
+            "skill_internal": "DeepSeek (不走 Claude，省成本)",
+        },
+        "scheduler": {
+            "tick_minutes": SCHEDULER_TICK_MINUTES,
+            "default_wake": SCHEDULER_DEFAULT_WAKE,
+            "default_sleep": SCHEDULER_DEFAULT_SLEEP,
+            "push_max_daily": SCHEDULER_PUSH_MAX_DAILY,
+            "min_push_gap": f"{SCHEDULER_MIN_PUSH_GAP} 分钟",
+        },
+        "companion": {
+            "silent_hours": COMPANION_SILENT_HOURS,
+            "interval_hours": COMPANION_INTERVAL_HOURS,
+            "max_daily": COMPANION_MAX_DAILY,
+        },
+        "alerts": {
+            "slow_threshold": f"{ALERT_SLOW_THRESHOLD}s",
+            "slow_consecutive": ALERT_SLOW_CONSECUTIVE,
+            "cooldown": f"{ALERT_COOLDOWN_SECONDS}s",
+        },
+        "channels": {
+            "active": ACTIVE_CHANNELS,
+            "telegram": "✅" if TELEGRAM_BOT_TOKEN else "❌ 未配置",
+            "telegram_api_base": TELEGRAM_API_BASE,
+        },
+        "system": {
+            "server_port": SERVER_PORT,
+            "admin_user_id": ADMIN_USER_ID or "未配置",
+            "daily_message_limit": DAILY_MESSAGE_LIMIT,
+            "inactive_days_threshold": INACTIVE_DAYS_THRESHOLD,
+        },
+    }
+    return jsonify(config)
 
 
 @api_bp.route("/admin/system/action", methods=["POST"])

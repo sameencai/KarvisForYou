@@ -114,8 +114,8 @@ def format_recent_messages(state):
         role = "用户" if role_val == "user" else "Karvis"
         t = m.get("time", "")
         content = m.get("content", "")
-        if len(content) > 150:
-            content = content[:150] + "..."
+        if len(content) > 500:
+            content = content[:500] + "..."
         lines.append(f"[{t}] {role}: {content}")
     return "\n".join(lines)
 
@@ -129,7 +129,7 @@ def add_message_to_state(state, role, content):
     messages = state.setdefault("recent_messages", [])
     messages.append({
         "role": role,
-        "content": content[:300],
+        "content": content[:1000],
         "time": now_str
     })
 
@@ -155,8 +155,8 @@ def maybe_compress_messages(messages):
         role = "用户" if m.get("role") == "user" else "Karvis"
         content = m.get("content", "")
         # 截取关键部分（保留足够语义）
-        if len(content) > 100:
-            content = content[:100] + "..."
+        if len(content) > 200:
+            content = content[:200] + "..."
         summary_parts.append(f"{role}: {content}")
 
     time_range = ""
@@ -167,8 +167,8 @@ def maybe_compress_messages(messages):
             time_range = f"({first_time} ~ {last_time})"
 
     summary_text = f"[对话摘要] {time_range} " + " | ".join(summary_parts)
-    if len(summary_text) > 800:
-        summary_text = summary_text[:800] + "..."
+    if len(summary_text) > 1500:
+        summary_text = summary_text[:1500] + "..."
 
     summary_msg = {
         "role": "system",
