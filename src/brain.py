@@ -9,6 +9,7 @@ import sys
 import time as _time
 import threading
 import requests
+import inspect
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -39,16 +40,25 @@ _executor = ThreadPoolExecutor(max_workers=6)
 _BEIJING_TZ = timezone(timedelta(hours=8))
 
 def _log(msg):
-    ts = datetime.now(_BEIJING_TZ).strftime("%H:%M:%S")
+    ts = datetime.now(_BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    # 获取调用者文件名和行号
+    try:
+        frame = inspect.currentframe().f_back
+        filename = frame.f_code.co_filename
+        lineno = frame.f_lineno
+        short_file = filename.split('/')[-1].split('\\')[-1]
+        loc = f"{short_file}:{lineno}"
+    except Exception:
+        loc = "?"
     try:
         from app import _get_request_id
         rid = _get_request_id()
         if rid:
-            print(f"{ts} [{rid}] {msg}", file=sys.stderr, flush=True)
+            print(f"{ts} [{loc}] [{rid}] {msg}", file=sys.stderr, flush=True)
             return
     except ImportError:
         pass
-    print(f"{ts} {msg}", file=sys.stderr, flush=True)
+    print(f"{ts} [{loc}] {msg}", file=sys.stderr, flush=True)
 
 
 # ============ 管理员告警推送 ============
@@ -586,12 +596,20 @@ def _select_rules(state, payload=None, ctx=None):
     if any(kw in user_text for kw in _HABITS_KW):
         segments.append(prompts.RULES_HABITS)
 
-    # 高级功能：语音 + 关键词触发（去掉 pending_decisions state 触发）
+    # 高级功能：语音 + 关键词触发，或有到期决策待复盘时也触发
     _ADV_KW = ("要不要", "纠结", "犹豫", "决定了", "决策", "复盘",
                "回顾", "分析", "梳理", "深潜", "盘点", "之前写过",
                "帮我看看", "文件里")
     is_voice = payload.get("type") == "voice" if payload else False
-    if is_voice or any(kw in user_text for kw in _ADV_KW):
+    _has_due_decision = False
+    if state:
+        from datetime import datetime, timezone, timedelta as _td
+        _today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        _has_due_decision = any(
+            not d.get("result") and d.get("review_date", "9999") <= _today
+            for d in state.get("pending_decisions", [])
+        )
+    if is_voice or any(kw in user_text for kw in _ADV_KW) or _has_due_decision:
         segments.append(prompts.RULES_ADVANCED)
 
     # V12: 财务规则 — 仅管理员且包含财务关键词时注入
@@ -811,7 +829,7 @@ def process(payload, send_fn=None, ctx=None):
     _log(f"[Brain][耗时] state读取: {t_state - t_token:.1f}s")
 
     # 3. 检查打卡超时
-    _check_checkin_timeout(state)
+    _check_checkin_timeout(state, ctx)
 
     # 4. 记录用户消息到短期记忆 + 更新 nudge_state（F5）
     if user_text and payload.get("type") != "system":
@@ -835,6 +853,7 @@ def process(payload, send_fn=None, ctx=None):
         if send_fn and reply:
             try:
                 send_fn(reply)
+                _log(f"[Brain] 回复已发送(shortcut): {reply[:200]}")
             except Exception as e:
                 _log(f"[Brain] 发送失败: {e}")
         _save_state_and_memory(state, decision, payload=payload, reply=reply,
@@ -845,6 +864,7 @@ def process(payload, send_fn=None, ctx=None):
     system_prompt = build_system_prompt(state, ctx, prompt_futs=prompt_futs, payload=payload)
     t_prompt = _time.time()
     _log(f"[Brain][耗时] prompt组装: {t_prompt - t_state:.1f}s (prompt长度={len(system_prompt)})")
+    _log(f"[Brain] system_prompt前800字:\n{system_prompt[:800]}")
 
     user_message = _build_user_message(payload)
 
@@ -975,7 +995,7 @@ def process(payload, send_fn=None, ctx=None):
     if send_fn and reply:
         try:
             send_fn(reply)
-            _log(f"[Brain] 回复已先行发送，开始后台保存")
+            _log(f"[Brain] 回复已发送: {reply[:200]}")
         except Exception as e:
             _log(f"[Brain] 先行发送失败: {e}")
 
@@ -1568,6 +1588,22 @@ def _parse_llm_output(text):
     except json.JSONDecodeError:
         pass
 
+    # 修复双花括号 {{ → {（LLM 模仿 prompt 示例中的转义语法）
+    if "{{" in text:
+        fixed = text.replace("{{", "{").replace("}}", "}")
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            pass
+        # 在修复后的文本中提取 JSON 块
+        start = fixed.find("{")
+        end = fixed.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(fixed[start:end + 1])
+            except json.JSONDecodeError:
+                pass
+
     # 尝试提取 JSON 块
     start = text.find("{")
     end = text.rfind("}")
@@ -1577,8 +1613,15 @@ def _parse_llm_output(text):
         except json.JSONDecodeError:
             pass
 
-    _log(f"[Brain] 无法解析 JSON: {text[:200]}")
-    return None
+    # 兜底：LLM 返回纯文本（未遵守 JSON 格式），降级为 ignore + 原文作为 reply
+    _log(f"[Brain] 无法解析 JSON，降级为纯文本回复: {text[:200]}")
+    return {
+        "thinking": "LLM 未返回 JSON，降级处理",
+        "skill": "ignore",
+        "params": {},
+        "reply": text,
+        "memory_updates": []
+    }
 
 
 def _update_nudge_state(state):
@@ -1621,7 +1664,7 @@ def _update_nudge_state(state):
         nudge["last_message_date"] = today_str
 
 
-def _check_checkin_timeout(state):
+def _check_checkin_timeout(state, ctx=None):
     """检查打卡是否超时"""
     if not state.get("checkin_pending"):
         return
@@ -1639,7 +1682,13 @@ def _check_checkin_timeout(state):
         if diff > CHECKIN_TIMEOUT_SECONDS:
             _log(f"[Brain] 打卡超时 ({diff:.0f}s)")
             from skills import checkin_flow
-            checkin_flow.finish(state, timeout=True)
+            try:
+                checkin_flow.finish(state, ctx, timeout=True)
+            except Exception as e2:
+                _log(f"[Brain] 打卡超时 finish 失败，强制清理状态: {e2}")
+                state["checkin_pending"] = False
+                state["checkin_step"] = 0
+                state["checkin_answers"] = []
     except Exception as e:
         _log(f"[Brain] 打卡超时检查异常: {e}")
 

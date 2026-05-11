@@ -34,6 +34,7 @@ from config import (
     WEATHER_API_KEY, WEATHER_CITY,
     SCHEDULER_TICK_MINUTES, SCHEDULER_DEFAULT_WAKE, SCHEDULER_DEFAULT_SLEEP,
     SCHEDULER_WEEKEND_SHIFT, SCHEDULER_PUSH_MAX_DAILY, SCHEDULER_MIN_PUSH_GAP,
+    SCHEDULER_MORNING_REPORT_CAP, SCHEDULER_MORNING_REPORT_LATEST,
     SERVER_PORT,
 )
 from user_context import (
@@ -1687,6 +1688,17 @@ def _add_minutes(time_str, minutes):
         return time_str
 
 
+def _min_time(t1, t2):
+    """返回两个 HH:MM 时间中较早的那个"""
+    try:
+        def _to_min(t):
+            p = t.split(":")
+            return int(p[0]) * 60 + int(p[1])
+        return t1 if _to_min(t1) <= _to_min(t2) else t2
+    except (ValueError, IndexError):
+        return t1
+
+
 def _generate_daily_intents(state):
     """V8: 基于用户节奏画像动态生成当天触达意图队列"""
     sched = state.get("scheduler", {})
@@ -1705,8 +1717,8 @@ def _generate_daily_intents(state):
         {
             "type": "morning_report",
             "earliest": wake_time,
-            "latest": _add_minutes(wake_time, 150),
-            "ideal": _add_minutes(wake_time, 30),
+            "latest": _min_time(_add_minutes(wake_time, 150), SCHEDULER_MORNING_REPORT_LATEST),
+            "ideal": _min_time(_add_minutes(wake_time, 30), SCHEDULER_MORNING_REPORT_CAP),
             "priority": "normal",
             "status": "pending"
         },

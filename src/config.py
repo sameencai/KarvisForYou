@@ -18,12 +18,12 @@ CLAUDE_BASE_URL = os.environ.get("CLAUDE_BASE_URL", "https://api.mcxhm.cn")
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
 
 # ============ Qwen Flash API (Tier 1: Flash) ============
-QWEN_API_KEY = os.environ.get("QWEN_API_KEY", "")
+QWEN_API_KEY = os.environ.get("QWEN_API_KEY", "sk-2c5f79b65c474ca58833f4d2a70d1c1f")
 QWEN_BASE_URL = os.environ.get("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen-flash")
+QWEN_MODEL = os.environ.get("QWEN_MODEL", "qwen3.6-flash")
 
 # ============ Qwen VL (视觉理解) ============
-QWEN_VL_MODEL = os.environ.get("QWEN_VL_MODEL", "qwen-vl-max")
+QWEN_VL_MODEL = os.environ.get("QWEN_VL_MODEL", "qwen-vl-max-latest")
 
 # ============ 企业微信（WeWork 应用） ============
 CORP_ID = os.environ.get("WEWORK_CORP_ID", "")
@@ -70,8 +70,10 @@ SCHEDULER_DEFAULT_WAKE = "08:00"  # 默认起床时间
 SCHEDULER_DEFAULT_SLEEP = "23:30" # 默认入睡时间
 SCHEDULER_WEEKEND_SHIFT = 60      # 周末平均晚起分钟数
 SCHEDULER_RHYTHM_WINDOW = 7       # 节奏学习滑动窗口（天）
-SCHEDULER_PUSH_MAX_DAILY = 6      # 每日所有主动推送总上限
+SCHEDULER_PUSH_MAX_DAILY = 7      # 每日所有主动推送总上限
 SCHEDULER_MIN_PUSH_GAP = 30       # 两次推送最小间隔（分钟）
+SCHEDULER_MORNING_REPORT_CAP = "08:30"  # 晨报 ideal 时间上限，防止因历史样本偏晚导致推送过晚
+SCHEDULER_MORNING_REPORT_LATEST = "09:00"  # 晨报最晚推送兜底，超过此时间强制触发
 
 # ============ 日志查看 ============
 LOG_FILE_KARVISFORALL = os.environ.get("LOG_FILE_KARVISFORALL", "/root/KarvisForAll/logs/app.log")
