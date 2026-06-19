@@ -15,16 +15,25 @@ import os
 import sys
 import json
 import random
+import requests
+import threading
 from datetime import datetime, timezone, timedelta
 from config import REFLECT_COOLDOWN_DAYS
 from local_io import LocalFileIO as _LocalIO
+
+
+# ============ 知乎开放平台配置 ============
+ZHIHU_APP_ID = "karvis"
+ZHIHU_TOKEN = "be779c17f826bd1ba7c675174271c6ba312af07a"
+ZHIHU_SEARCH_URL = "https://developer.zhihu.com/api/v1/content/zhihu_search"
 
 
 BEIJING_TZ = timezone(timedelta(hours=8))
 
 
 def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+    from logger import log
+    log(msg)
 
 
 def _reflect_dir(ctx):
@@ -525,6 +534,16 @@ def answer(params, state, ctx):
 
     _log(f"[reflect.answer] qid={qid}, answer_len={len(answer_text)}")
 
+    # 异步搜索知乎相关高赞答案并发送给用户
+    user_id = ctx.user_id if hasattr(ctx, 'user_id') else ""
+    if user_id and question:
+        t = threading.Thread(
+            target=_async_send_zhihu_answer,
+            args=(question, category, user_id),
+            daemon=True
+        )
+        t.start()
+
     return {
         "success": True,
         "reply": reply,
@@ -677,6 +696,178 @@ def _write_log_entry(entry, ctx):
         _LocalIO.write_text(path, existing + line + "\n")
     except Exception as e:
         _log(f"[reflect] 日志写入失败: {e}")
+
+
+# ============ 知乎高赞答案搜索 ============
+
+# 最低点赞数阈值，低于此值认为质量不够
+_ZHIHU_MIN_VOTEUP = 10
+
+
+def _search_zhihu_top_answer(question, category):
+    """
+    从知乎开放平台搜索与深度自问相关的高赞答案。
+    策略：优先精确搜索，质量不够时用维度关键词泛化重试。
+    """
+    import time as _time
+
+    # 第一轮：用问题原文搜索
+    search_query = question.strip().rstrip("？?")
+    if len(search_query) > 40:
+        search_query = search_query[:40]
+
+    result = _do_zhihu_search(search_query)
+    if result:
+        return result
+
+    # 第二轮：用维度关键词 + 问题核心词泛化搜索
+    fallback_query = _build_fallback_query(question, category)
+    if fallback_query and fallback_query != search_query:
+        _log(f"[reflect.zhihu] 精确搜索质量不足，泛化重试: q={fallback_query}")
+        result = _do_zhihu_search(fallback_query)
+        if result:
+            return result
+
+    _log(f"[reflect.zhihu] 两轮搜索均未找到高质量答案")
+    return None
+
+
+def _build_fallback_query(question, category):
+    """构建泛化搜索关键词：从问题中提取核心概念"""
+    # 维度→通用高质量关键词映射
+    category_keywords = {
+        "自我认知": "认识自己 自我探索",
+        "恐惧与安全感": "克服恐惧 安全感",
+        "内在对话": "内心独白 自我对话",
+        "人际关系": "人际关系 相处之道",
+        "时间与优先级": "时间管理 人生优先级",
+        "欲望与动力": "人生目标 内驱力",
+        "情绪与疗愈": "情绪管理 自我疗愈",
+        "价值观": "人生价值观 活着的意义",
+        "成长与变化": "个人成长 改变自己",
+        "梦想与想象": "梦想 理想生活",
+    }
+    return category_keywords.get(category, "")
+
+
+def _do_zhihu_search(search_query):
+    """
+    执行一次知乎搜索并筛选高质量答案。
+    返回格式化消息文本或 None。
+    """
+    import time as _time
+
+    headers = {
+        "Authorization": f"Bearer {ZHIHU_TOKEN}",
+        "X-Request-Timestamp": str(int(_time.time())),
+        "Content-Type": "application/json",
+    }
+
+    try:
+        _log(f"[reflect.zhihu] 搜索: q={search_query}")
+        resp = requests.get(
+            ZHIHU_SEARCH_URL,
+            params={"Query": search_query},
+            headers=headers,
+            timeout=10
+        )
+        _log(f"[reflect.zhihu] API响应: status={resp.status_code}")
+
+        if resp.status_code != 200:
+            _log(f"[reflect.zhihu] 搜索失败: HTTP {resp.status_code}, body={resp.text[:200]}")
+            return None
+
+        data = resp.json()
+        if data.get("Code") != 0:
+            _log(f"[reflect.zhihu] API错误: code={data.get('Code')}, msg={data.get('Message')}")
+            return None
+
+        items = data.get("Data", {}).get("Items", [])
+        _log(f"[reflect.zhihu] 返回 {len(items)} 条结果")
+
+        if not items:
+            return None
+
+        # 过滤：排除专栏文章，只保留问答
+        filtered = [
+            item for item in items
+            if "zhuanlan.zhihu.com" not in (item.get("Url") or "")
+        ]
+
+        # 过滤：只保留达到最低点赞阈值的答案
+        quality = [
+            item for item in filtered
+            if item.get("VoteUpCount", 0) >= _ZHIHU_MIN_VOTEUP
+        ]
+
+        _log(f"[reflect.zhihu] 过滤: 原始={len(items)}, 去专栏={len(filtered)}, "
+             f"达标(>={_ZHIHU_MIN_VOTEUP}赞)={len(quality)}")
+
+        if not quality:
+            return None
+
+        # 按综合质量评分排序：点赞数 + 评论互动加权
+        for item in quality:
+            voteup = item.get("VoteUpCount", 0)
+            comment = item.get("CommentCount", 0)
+            item["_quality_score"] = voteup + comment * 3
+
+        quality_sorted = sorted(quality, key=lambda x: x["_quality_score"], reverse=True)
+
+        # 从 top3 高质量中随机选一条（避免每次都是同一个）
+        candidates = quality_sorted[:3]
+        top = random.choice(candidates)
+
+        title = top.get("Title", "").replace(" - 知乎", "")
+        content = top.get("ContentText", "").strip()
+        author = top.get("AuthorName", "匿名用户")
+        voteup = top.get("VoteUpCount", 0)
+        comment = top.get("CommentCount", 0)
+        url = top.get("Url", "")
+
+        _log(f"[reflect.zhihu] 选中: title={title[:30]}, author={author}, "
+             f"voteup={voteup}, comment={comment}, score={top['_quality_score']}, "
+             f"url={url[:60]}")
+
+        # 截断到合理长度
+        if len(content) > 500:
+            content = content[:500] + "..."
+
+        if not content:
+            _log(f"[reflect.zhihu] 选中条目内容为空, 跳过")
+            return None
+
+        # 格式化输出
+        result = (
+            f"📖 知乎相关回答\n"
+            f"「{title}」\n\n"
+            f"{content}\n\n"
+            f"—— {author}（👍 {voteup}）"
+        )
+        if url:
+            result += f"\n🔗 {url}"
+
+        return result
+
+    except Exception as e:
+        _log(f"[reflect.zhihu] 异常: {e}")
+        return None
+
+
+def _async_send_zhihu_answer(question, category, user_id):
+    """异步搜索知乎并发送给用户（不阻塞主流程）"""
+    import time
+    try:
+        time.sleep(1.5)  # 等待主回复先送达
+        zhihu_answer = _search_zhihu_top_answer(question, category)
+        if zhihu_answer:
+            import channel_router
+            channel_router.send_message(user_id, zhihu_answer)
+            _log(f"[reflect.zhihu] 已发送知乎推荐给 {user_id}")
+        else:
+            _log(f"[reflect.zhihu] 未找到相关知乎内容, user={user_id}")
+    except Exception as e:
+        _log(f"[reflect.zhihu] 异步发送失败: {e}")
 
 
 # Skill 热加载注册表

@@ -10,7 +10,8 @@ import re
 from datetime import datetime, timezone, timedelta
 
 def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+    from logger import log
+    log(msg)
 
 # ---- 北京时区 ----
 _BJ_TZ = timezone(timedelta(hours=8))

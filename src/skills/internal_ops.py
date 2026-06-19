@@ -20,7 +20,8 @@ from datetime import datetime, timezone, timedelta
 BEIJING_TZ = timezone(timedelta(hours=8))
 
 def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+    from logger import log
+    log(msg)
 
 
 def read_files(params, state, ctx):
@@ -196,9 +197,130 @@ def list_files(params, state, ctx):
         return {"success": False, "reply": f"目录读取异常: {e}"}
 
 
+def grep(params, state, ctx):
+    """
+    internal.grep — 递归搜索用户数据目录（真正的 grep）。
+
+    params:
+        pattern: str — 搜索模式（支持正则表达式）
+        path: str — 搜索起始路径（相对于用户 base_dir，默认全目录）
+        glob: str — 文件名过滤（如 "*.md"，默认 "*.md"）
+        context_lines: int — 匹配行前后各返回几行上下文（默认 1）
+        max_results: int — 最大返回条数（默认 20）
+        case_sensitive: bool — 是否区分大小写（默认 false）
+    """
+    import re
+    import os
+
+    pattern = params.get("pattern", "")
+    path = params.get("path", "")
+    glob_pattern = params.get("glob", "*.md")
+    context_lines = params.get("context_lines", 1)
+    max_results = params.get("max_results", 20)
+    case_sensitive = params.get("case_sensitive", False)
+
+    if not pattern:
+        return {"success": False, "reply": "没有指定搜索模式"}
+
+    # 确定搜索根目录
+    if path:
+        if path.startswith("/"):
+            if not path.startswith(ctx.base_dir):
+                return {"success": False, "reply": "不允许搜索该路径"}
+            search_root = path
+        else:
+            search_root = os.path.join(ctx.base_dir, path)
+    else:
+        search_root = ctx.base_dir
+
+    if not os.path.isdir(search_root):
+        return {"success": False, "reply": f"目录不存在: {search_root}"}
+
+    # 编译正则
+    flags = 0 if case_sensitive else re.IGNORECASE
+    try:
+        regex = re.compile(pattern, flags)
+    except re.error as e:
+        # 正则无效，降级为纯文本搜索
+        pattern_escaped = re.escape(pattern)
+        regex = re.compile(pattern_escaped, flags)
+
+    # 文件名 glob 匹配
+    import fnmatch
+
+    # 递归搜索
+    matches = []
+    files_searched = 0
+    max_files = 200  # 安全限制：最多扫描 200 个文件
+
+    for root, dirs, files in os.walk(search_root):
+        # 跳过隐藏目录和 _Karvis/logs
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d != 'logs']
+
+        for filename in files:
+            if not fnmatch.fnmatch(filename, glob_pattern):
+                continue
+
+            files_searched += 1
+            if files_searched > max_files:
+                break
+
+            filepath = os.path.join(root, filename)
+            try:
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()
+            except (IOError, OSError):
+                continue
+
+            for line_num, line in enumerate(lines, 1):
+                if regex.search(line):
+                    # 收集上下文
+                    start = max(0, line_num - 1 - context_lines)
+                    end = min(len(lines), line_num + context_lines)
+                    context = []
+                    for i in range(start, end):
+                        prefix = ">" if i == line_num - 1 else " "
+                        context.append(f"{prefix}{i+1}: {lines[i].rstrip()}")
+
+                    # 相对路径（更简洁）
+                    rel_path = os.path.relpath(filepath, ctx.base_dir)
+
+                    matches.append({
+                        "file": rel_path,
+                        "line": line_num,
+                        "match": line.strip()[:150],
+                        "context": "\n".join(context)[:400],
+                    })
+
+                    if len(matches) >= max_results:
+                        break
+
+            if len(matches) >= max_results:
+                break
+
+        if files_searched > max_files or len(matches) >= max_results:
+            break
+
+    _log(f"[internal_ops] grep 完成: pattern='{pattern}', "
+         f"files_searched={files_searched}, matches={len(matches)}")
+
+    return {
+        "success": True,
+        "reply": None,
+        "agent_context": {
+            "pattern": pattern,
+            "matches": matches,
+            "total": len(matches),
+            "files_searched": files_searched,
+            "truncated": len(matches) >= max_results,
+        }
+    }
+
+
 # ============ Skill 热加载注册表 ============
 SKILL_REGISTRY = {
     "internal.read": read_files,
     "internal.search": search_files,
     "internal.list": list_files,
+    "internal.grep": grep,
 }

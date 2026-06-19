@@ -6,7 +6,8 @@ KarvisForAll 对话式设置
 import sys
 
 def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+    from logger import log
+    log(msg)
 
 
 def set_nickname(params, state, ctx):
@@ -108,7 +109,8 @@ def set_soul(params, state, ctx):
 
     return {
         "success": True,
-        "reply": f"收到，我会{style}~",
+        "prefer_llm_reply": True,  # 优先用 LLM 预生成的回复（更自然），仅在 LLM 没给 reply 时才用兜底
+        "reply": f"风格已更新~",
         "memory_updates": [
             {
                 "section": "关键偏好",

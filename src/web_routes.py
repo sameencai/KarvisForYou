@@ -29,8 +29,8 @@ api_bp = Blueprint("api", __name__)
 
 
 def _log(msg):
-    ts = datetime.now(_BEIJING_TZ).strftime("%H:%M:%S")
-    print(f"{ts} {msg}", file=sys.stderr, flush=True)
+    from logger import log
+    log(msg)
 
 
 # ============================================================
@@ -248,8 +248,7 @@ def api_notes(user_id=None):
             "content": content,
         })
 
-    # 最新在前
-    notes.reverse()
+    # 文件中新条目在前（append_to_quick_notes 插入到 header 之后），无需 reverse
     # 分页（简单截断）
     limit = int(request.args.get("limit", "50"))
     offset = int(request.args.get("offset", "0"))
@@ -761,7 +760,7 @@ def api_misc(user_id=None):
             content = content[:-3].strip()
         notes.append({"time": header, "content": content})
 
-    notes.reverse()
+    # 文件中新条目在前，无需 reverse
     limit = int(request.args.get("limit", "50"))
     offset = int(request.args.get("offset", "0"))
     total = len(notes)

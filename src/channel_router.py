@@ -16,8 +16,8 @@ from datetime import datetime, timezone, timedelta
 _BEIJING_TZ = timezone(timedelta(hours=8))
 
 def _log(msg):
-    ts = datetime.now(_BEIJING_TZ).strftime("%H:%M:%S")
-    print(f"{ts} [ChannelRouter] {msg}", file=sys.stderr, flush=True)
+    from logger import log
+    log(f"[ChannelRouter] {msg}")
 
 
 # ============ 渠道注册表 ============

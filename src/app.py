@@ -34,6 +34,7 @@ from config import (
     WEATHER_API_KEY, WEATHER_CITY,
     SCHEDULER_TICK_MINUTES, SCHEDULER_DEFAULT_WAKE, SCHEDULER_DEFAULT_SLEEP,
     SCHEDULER_WEEKEND_SHIFT, SCHEDULER_PUSH_MAX_DAILY, SCHEDULER_MIN_PUSH_GAP,
+    SCHEDULER_MORNING_REPORT_CAP, SCHEDULER_MORNING_REPORT_LATEST,
     SERVER_PORT,
 )
 from user_context import (
@@ -85,30 +86,25 @@ app.register_blueprint(api_bp, url_prefix="/api")
 
 
 # ============ Request ID 线程本地存储 ============
-_request_local = threading.local()
+from logger import set_request_id as _logger_set_rid, get_request_id as _logger_get_rid
 
 
 def _get_request_id():
     """获取当前线程的 Request ID"""
-    return getattr(_request_local, "request_id", None)
+    return _logger_get_rid()
 
 
 def _set_request_id(rid=None):
     """设置当前线程的 Request ID，不传则自动生成短 ID"""
-    _request_local.request_id = rid or uuid.uuid4().hex[:8]
-    return _request_local.request_id
+    return _logger_set_rid(rid)
 
 
 _BEIJING_TZ = timezone(timedelta(hours=8))
 
 
 def _log(msg):
-    ts = datetime.now(_BEIJING_TZ).strftime("%H:%M:%S")
-    rid = _get_request_id()
-    if rid:
-        print(f"{ts} [{rid}] {msg}", file=sys.stderr, flush=True)
-    else:
-        print(f"{ts} {msg}", file=sys.stderr, flush=True)
+    from logger import log
+    log(msg)
 
 
 # ============ 企微 access_token 缓存 ============
@@ -862,7 +858,8 @@ def system_endpoint():
         data = request.get_json(force=True)
         action = data.get("action", "")
         target_user = data.get("user_id", "")
-        _log(f"[/system] action={action}, user={target_user or 'all'}")
+        if action != "precise_remind":
+            _log(f"[/system] action={action}, user={target_user or 'all'}")
 
         if action == "refresh_cache":
             from memory import invalidate_all_caches
@@ -889,6 +886,21 @@ def system_endpoint():
                     _log(f"[/system] V8 {action} 用户 {uid} 失败: {e}")
                     results.append({"user_id": uid, "ok": False, "error": str(e)})
             return json.dumps({"ok": True, "action": action, "results": results}, ensure_ascii=False)
+
+        # precise_remind 每分钟执行，无推送时静默（避免日志刷屏）
+        if action == "precise_remind":
+            user_ids = [target_user] if target_user else get_all_active_users()
+            total_sent = 0
+            for uid in user_ids:
+                try:
+                    ctx, _ = get_or_create_user(uid)
+                    result = _run_system_action_for_user(action, data, uid, ctx)
+                    total_sent += result.get("sent", 0)
+                except Exception as e:
+                    _log(f"[/system] precise_remind 用户 {uid} 失败: {e}")
+            if total_sent > 0:
+                _log(f"[/system] precise_remind 完成, 共推送 {total_sent} 条")
+            return json.dumps({"ok": True, "action": action, "sent": total_sent})
 
         # 如果指定了 user_id，只处理该用户；否则遍历所有活跃用户
         if target_user:
@@ -927,7 +939,8 @@ def system_endpoint():
 def _run_system_action_for_user(action, data, uid, ctx):
     """为单个用户执行系统动作，返回结果 dict"""
     from memory import read_state_cached, write_state_and_update_cache
-    _log(f"[system_action] 开始执行: action={action}, user={uid}")
+    if action != "precise_remind":
+        _log(f"[system_action] 开始执行: action={action}, user={uid}")
     t0 = time.time()
 
     if action == "todo_remind":
@@ -977,6 +990,45 @@ def _run_system_action_for_user(action, data, uid, ctx):
             _log(f"[/system] [{uid}] 读取上下文失败（不影响主流程）: {e}")
 
         if action == "morning_report":
+            # 清理过期 Top 3（超过 1 天），并注入提示让 LLM 通知用户
+            try:
+                _state = read_state_cached(ctx) or {}
+                daily_top3 = _state.get("daily_top3", {})
+                if isinstance(daily_top3, list):
+                    daily_top3 = {"items": daily_top3, "date": ""}
+                if daily_top3 and daily_top3.get("items"):
+                    top3_date = daily_top3.get("date", "")
+                    today_dt = datetime.now(BEIJING_TZ)
+                    today_str = today_dt.strftime("%Y-%m-%d")
+                    days_ago = 999
+                    if top3_date:
+                        try:
+                            t3_dt = datetime.strptime(top3_date, "%Y-%m-%d").replace(tzinfo=BEIJING_TZ)
+                            days_ago = (today_dt - t3_dt).days
+                        except Exception:
+                            pass
+                    if days_ago > 1:
+                        # 过期：构建完成情况摘要
+                        items = daily_top3["items"]
+                        done_count = sum(1 for i in items if i.get("done"))
+                        items_str = "、".join(
+                            f"{'✅' if i.get('done') else '⬜'}{i.get('text', '')}"
+                            for i in items
+                        )
+                        context["expired_top3"] = {
+                            "date": top3_date,
+                            "days_ago": days_ago,
+                            "done_count": done_count,
+                            "total": len(items),
+                            "items_summary": items_str,
+                        }
+                        # 清除过期 Top 3
+                        _state["daily_top3"] = {}
+                        write_state_and_update_cache(_state, ctx)
+                        _log(f"[/system] [{uid}] 清理过期 Top 3 (date={top3_date}, {days_ago}天前, 完成{done_count}/{len(items)})")
+            except Exception as e:
+                _log(f"[/system] [{uid}] 过期 Top 3 清理失败: {e}")
+
             try:
                 context["time_capsule"] = _build_time_capsule(ctx)
             except Exception as e:
@@ -1086,6 +1138,16 @@ def _run_system_action_for_user(action, data, uid, ctx):
         if reply:
             channel_router.send_message(uid, reply)
         _log(f"[system_action] weekly_review 完成, user={uid}, has_reply={bool(reply)}, 耗时={time.time()-t0:.1f}s")
+
+        # V14: 周报后自动触发记忆维护
+        try:
+            from skills.memory_maintain import execute as mem_maintain
+            state_fresh = read_state_cached(ctx) or {}
+            maintain_result = mem_maintain({}, state_fresh, ctx)
+            _log(f"[system_action] memory.maintain 完成, user={uid}, result={maintain_result.get('maintained', {})}")
+        except Exception as e:
+            _log(f"[system_action] memory.maintain 失败(不影响周报): {e}")
+
         return {"ok": True, "has_reply": bool(reply)}
 
     if action == "nudge_check":
@@ -1687,6 +1749,17 @@ def _add_minutes(time_str, minutes):
         return time_str
 
 
+def _min_time(t1, t2):
+    """返回两个 HH:MM 时间中较早的那个"""
+    try:
+        def _to_min(t):
+            p = t.split(":")
+            return int(p[0]) * 60 + int(p[1])
+        return t1 if _to_min(t1) <= _to_min(t2) else t2
+    except (ValueError, IndexError):
+        return t1
+
+
 def _generate_daily_intents(state):
     """V8: 基于用户节奏画像动态生成当天触达意图队列"""
     sched = state.get("scheduler", {})
@@ -1701,12 +1774,14 @@ def _generate_daily_intents(state):
         shift = rhythm.get("weekend_shift", SCHEDULER_WEEKEND_SHIFT)
         wake_time = _add_minutes(wake_time, shift)
 
+    # 早报 earliest 不能超过 LATEST，防止 avg_wake_time 过晚导致早报永远等到起床后才发
+    morning_earliest = _min_time(wake_time, SCHEDULER_MORNING_REPORT_LATEST)
     intents = [
         {
             "type": "morning_report",
-            "earliest": wake_time,
-            "latest": _add_minutes(wake_time, 150),
-            "ideal": _add_minutes(wake_time, 30),
+            "earliest": morning_earliest,
+            "latest": SCHEDULER_MORNING_REPORT_LATEST,
+            "ideal": _min_time(_add_minutes(morning_earliest, 15), SCHEDULER_MORNING_REPORT_CAP),
             "priority": "normal",
             "status": "pending"
         },
@@ -1794,7 +1869,9 @@ def _daily_init(uid, ctx):
     intents = _generate_daily_intents(state)
 
     # 过期意图标记 skipped（容器重启等场景）
+    # 但 morning_report 如果过期不超过 2 小时，立刻兜底执行而非跳过
     now_min = now.hour * 60 + now.minute
+    force_send_intents = []
     for intent in intents:
         latest = intent.get("latest", "23:59")
         try:
@@ -1802,9 +1879,16 @@ def _daily_init(uid, ctx):
         except (ValueError, IndexError):
             continue
         if now_min > latest_min:
-            intent["status"] = "skipped"
-            intent["_skip_reason"] = f"初始化时已过期（now={now.strftime('%H:%M')} > latest={latest}）"
-            _log(f"[V8][{uid}] 意图 {intent['type']} 已过期，标记 skipped")
+            if intent["type"] == "morning_report" and (now_min - latest_min) <= 120:
+                # 早报过期不超过 2 小时，标记为待立刻执行
+                intent["status"] = "pending"
+                intent["_trigger_reason"] = f"兜底补发（初始化时已过期 {now_min - latest_min} 分钟）"
+                force_send_intents.append(intent)
+                _log(f"[V8][{uid}] 意图 morning_report 已过期但不超过2h，将兜底补发")
+            else:
+                intent["status"] = "skipped"
+                intent["_skip_reason"] = f"初始化时已过期（now={now.strftime('%H:%M')} > latest={latest}）"
+                _log(f"[V8][{uid}] 意图 {intent['type']} 已过期，标记 skipped")
 
     sched["intents"] = intents
     sched["_init_date"] = today_str
@@ -1934,6 +2018,10 @@ def _rule_evaluate(intent, state, now):
         return "wait"
 
     if now_min < earliest_min:
+        # 安全检查：如果 earliest > latest（配置异常），且已过 latest，应兜底触发
+        if earliest_min > latest_min and now_min >= latest_min:
+            intent["_trigger_reason"] = "兜底触发（earliest>latest 异常，已过 latest）"
+            return "send"
         return "wait"
 
     if now_min >= latest_min:

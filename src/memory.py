@@ -12,7 +12,8 @@ from config import RECENT_MESSAGES_LIMIT, PROMPT_CACHE_TTL, STATE_CACHE_TTL
 import json as _json
 
 def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+    from logger import log
+    log(msg)
 
 
 # ============ Prompt 缓存（按 file_path，多用户天然隔离）============
@@ -137,8 +138,20 @@ def add_message_to_state(state, role, content):
         state["recent_messages"] = maybe_compress_messages(messages)
 
 
+def _extract_summary_content(text):
+    """从旧摘要中提取实际对话内容，去掉嵌套的 [对话摘要] (时间) 头部。"""
+    import re
+    # 去掉所有 "[对话摘要] (时间范围) " 前缀（可能多层嵌套）
+    cleaned = re.sub(r'\[对话摘要\]\s*\([^)]*\)\s*', '', text).strip()
+    return cleaned
+
+
 def maybe_compress_messages(messages):
-    """对话压缩：保留最近 6 条原始消息，旧消息压缩为摘要（每条 100 字，总上限 800 字）。"""
+    """对话压缩：保留最近 6 条原始消息，旧消息压缩为摘要（每条 100 字，总上限 800 字）。
+    
+    去重策略：旧摘要按 " | " 分段后，与本次新压缩消息逐段对比，
+    移除完全匹配的重复片段，避免同一段对话在摘要中出现两次。
+    """
     COMPRESS_KEEP_RECENT = 6  # 保留最近 6 条原始消息
 
     if len(messages) <= RECENT_MESSAGES_LIMIT:
@@ -147,17 +160,29 @@ def maybe_compress_messages(messages):
     to_compress = messages[:-COMPRESS_KEEP_RECENT]
     to_keep = messages[-COMPRESS_KEEP_RECENT:]
 
-    summary_parts = []
+    # 先收集旧摘要中的实质内容（扁平化，避免嵌套）
+    old_summary_content = ""
+    new_parts = []
+
+    # 收集新消息的规范化文本（用于去重）
+    new_normalized = set()
+
     for m in to_compress:
         if m.get("role") == "system" and m.get("content", "").startswith("[对话摘要]"):
-            summary_parts.append(m["content"])
+            extracted = _extract_summary_content(m["content"])
+            if extracted:
+                old_summary_content = extracted
             continue
         role = "用户" if m.get("role") == "user" else "Karvis"
         content = m.get("content", "")
-        # 截取关键部分（保留足够语义）
         if len(content) > 200:
             content = content[:200] + "..."
-        summary_parts.append(f"{role}: {content}")
+        part = f"{role}: {content}"
+        new_parts.append(part)
+        # 规范化：去掉角色前缀、空白、截断标记，取前80字做 key
+        normalized = content.strip().rstrip("...").strip()[:80]
+        if normalized:
+            new_normalized.add(normalized)
 
     time_range = ""
     if to_compress:
@@ -166,7 +191,35 @@ def maybe_compress_messages(messages):
         if first_time and last_time:
             time_range = f"({first_time} ~ {last_time})"
 
-    summary_text = f"[对话摘要] {time_range} " + " | ".join(summary_parts)
+    # 合并：旧摘要精华（去重后）+ 新消息
+    all_parts = []
+    if old_summary_content and new_normalized:
+        old_segments = old_summary_content.split(" | ")
+        deduped_segments = []
+        for seg in old_segments:
+            seg = seg.strip()
+            if not seg:
+                continue
+            # 提取 "角色: 内容" 中的内容部分
+            seg_content = seg.split(": ", 1)[-1] if ": " in seg else seg
+            seg_key = seg_content.strip().rstrip("...").strip()[:80]
+            if seg_key and seg_key in new_normalized:
+                continue  # 这段在新消息中已有，跳过
+            deduped_segments.append(seg)
+
+        if deduped_segments:
+            old_deduped = " | ".join(deduped_segments)
+            if len(old_deduped) > 500:
+                old_deduped = "..." + old_deduped[-500:]
+            all_parts.append(old_deduped)
+    elif old_summary_content:
+        # 没有新消息可去重，保留旧摘要
+        if len(old_summary_content) > 500:
+            old_summary_content = "..." + old_summary_content[-500:]
+        all_parts.append(old_summary_content)
+    all_parts.extend(new_parts)
+
+    summary_text = f"[对话摘要] {time_range} " + " | ".join(all_parts)
     if len(summary_text) > 1500:
         summary_text = summary_text[:1500] + "..."
 
@@ -284,7 +337,6 @@ def read_state_cached(ctx):
     with _state_lock:
         cached = _state_cache.get(uid)
         if cached and cached["data"] is not None and cached["expire_time"] > now:
-            _log(f"[State] 命中内存缓存 ({uid})")
             return copy.deepcopy(cached["data"])
 
     # 2. /tmp 磁盘缓存
@@ -297,7 +349,6 @@ def read_state_cached(ctx):
                     data = _json.load(f)
                 with _state_lock:
                     _state_cache[uid] = {"data": data, "expire_time": now + STATE_CACHE_TTL}
-                _log(f"[State] 命中 /tmp 缓存 ({uid})")
                 return copy.deepcopy(data)
     except Exception:
         pass
@@ -305,7 +356,6 @@ def read_state_cached(ctx):
     # 3. 通过 IO 回源读取
     data = ctx.IO.read_json(ctx.state_file) or {}
     _update_state_cache(uid, data)
-    _log(f"[State] 从文件读取 ({uid})")
     return copy.deepcopy(data)
 
 

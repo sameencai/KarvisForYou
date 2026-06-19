@@ -9,6 +9,7 @@ import sys
 import time as _time
 import threading
 import requests
+import inspect
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -39,16 +40,8 @@ _executor = ThreadPoolExecutor(max_workers=6)
 _BEIJING_TZ = timezone(timedelta(hours=8))
 
 def _log(msg):
-    ts = datetime.now(_BEIJING_TZ).strftime("%H:%M:%S")
-    try:
-        from app import _get_request_id
-        rid = _get_request_id()
-        if rid:
-            print(f"{ts} [{rid}] {msg}", file=sys.stderr, flush=True)
-            return
-    except ImportError:
-        pass
-    print(f"{ts} {msg}", file=sys.stderr, flush=True)
+    from logger import log
+    log(msg)
 
 
 # ============ 管理员告警推送 ============
@@ -565,9 +558,10 @@ def _select_rules(state, payload=None, ctx=None):
     方案 A: 用户消息根据 state 和关键词动态注入分段，RULES_CORE 始终注入
     V12: 管理员额外注入 RULES_FINANCE，所有用户注入 RULES_SKILLS_MGMT
     """
-    # 方案 C: 定时任务走精简 prompt
+    # 方案 C: 定时任务走精简 prompt — 只注入当前 action 对应的规则段
     if payload and payload.get("type") == "system":
-        return [prompts.RULES_SYSTEM_TASKS]
+        action = payload.get("action", "")
+        return [prompts.get_system_task_rules(action)]
 
     # 方案 A: 用户消息 — CORE 始终注入，其余按需
     segments = [prompts.RULES_CORE]
@@ -586,12 +580,20 @@ def _select_rules(state, payload=None, ctx=None):
     if any(kw in user_text for kw in _HABITS_KW):
         segments.append(prompts.RULES_HABITS)
 
-    # 高级功能：语音 + 关键词触发（去掉 pending_decisions state 触发）
+    # 高级功能：语音 + 关键词触发，或有到期决策待复盘时也触发
     _ADV_KW = ("要不要", "纠结", "犹豫", "决定了", "决策", "复盘",
                "回顾", "分析", "梳理", "深潜", "盘点", "之前写过",
                "帮我看看", "文件里")
     is_voice = payload.get("type") == "voice" if payload else False
-    if is_voice or any(kw in user_text for kw in _ADV_KW):
+    _has_due_decision = False
+    if state:
+        from datetime import datetime, timezone, timedelta as _td
+        _today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        _has_due_decision = any(
+            not d.get("result") and d.get("review_date", "9999") <= _today
+            for d in state.get("pending_decisions", [])
+        )
+    if is_voice or any(kw in user_text for kw in _ADV_KW) or _has_due_decision:
         segments.append(prompts.RULES_ADVANCED)
 
     # V12: 财务规则 — 仅管理员且包含财务关键词时注入
@@ -620,13 +622,15 @@ def build_system_prompt(state, ctx, prompt_futs=None, payload=None):
     now_bj = datetime.now(beijing_tz)
     current_time = _build_time_string(now_bj)
 
+    is_system = payload and payload.get("type") == "system"
+    action = payload.get("action", "") if payload else ""
+
     # memory 从该用户的文件加载
     if prompt_futs and "mem" in prompt_futs:
         mem = prompt_futs["mem"].result()
     else:
         mem = load_memory(ctx)
 
-    recent = format_recent_messages(state)
     state_summary = _build_state_summary(state)
 
     # SOUL 支持用户自定义覆写
@@ -641,8 +645,34 @@ def build_system_prompt(state, ctx, prompt_futs=None, payload=None):
     if ai_name:
         soul += f"\n- 用户给你起了昵称「{ai_name}」，在合适的时候可以用这个名字自称"
 
+    # ---- system action 精简模式 ----
+    if is_system and action in ("morning_report", "evening_checkin", "daily_report",
+                                 "mood_generate", "reflect_push"):
+        # 精简记忆：保留近期关注、偏好、书影相关段落
+        mem_brief = _extract_memory_brief(mem)
+        # 精简对话：取最近 24 小时内的消息，总量上限 800 字
+        recent_brief = _extract_recent_24h(state)
+
+        # 条件注入 RULES
+        rules_segments = _select_rules(state, payload, ctx=ctx)
+        rules_text = "\n\n".join(rules_segments)
+
+        # 精简输出格式
+        output_brief = '## 输出格式（严格 JSON）\n{"thinking":"一句话","skill":"none","params":{},"reply":"回复内容","state_updates":{},"memory_updates":[],"continue":false}'
+
+        parts = [soul,
+                 f"\n## 记忆摘要\n{mem_brief}",
+                 f"\n## 最近对话\n{recent_brief}",
+                 f"\n## 当前状态\n{state_summary}",
+                 f"\n## 当前时间\n{current_time}",
+                 f"\n{rules_text}",
+                 f"\n{output_brief}"]
+        return "\n".join(parts)
+
+    # ---- 正常模式（用户对话） ----
+    recent = format_recent_messages(state)
+
     # 方案 C+A: 条件注入 RULES（V12: 传入 ctx 用于 admin 判断）
-    is_system = payload and payload.get("type") == "system"
     rules_segments = _select_rules(state, payload, ctx=ctx)
     rules_text = "\n\n".join(rules_segments)
 
@@ -652,6 +682,12 @@ def build_system_prompt(state, ctx, prompt_futs=None, payload=None):
     else:
         from skill_loader import get_skills_for_prompt
         allowed_names = get_skills_for_prompt(ctx)
+        # Local 模式：屏蔽 internal.search（grep 更强）
+        # OneDrive 模式：屏蔽 internal.grep（依赖本地文件系统）
+        if ctx.storage_mode != "onedrive":
+            allowed_names = [n for n in allowed_names if n != "internal.search"]
+        else:
+            allowed_names = [n for n in allowed_names if n != "internal.grep"]
         skills_block = prompts.build_skills_prompt(allowed_names)
 
     parts = [soul,
@@ -665,6 +701,68 @@ def build_system_prompt(state, ctx, prompt_futs=None, payload=None):
     parts.append(f"\n{prompts.OUTPUT_FORMAT}")
 
     return "\n".join(parts)
+
+
+def _extract_memory_brief(full_memory):
+    """从完整记忆中提取早报/系统动作需要的关键段落"""
+    if not full_memory:
+        return "（无记忆）"
+    
+    # 提取关键段落：近期关注、偏好、用户画像、书影相关
+    import re
+    keep_sections = ("近期关注", "偏好", "关键偏好", "用户画像", "生活背景",
+                     "阅读", "书", "影视", "在看", "在读")
+    sections = re.split(r'\n(?=## )', full_memory)
+    kept = []
+    for section in sections:
+        header = section.strip().split('\n')[0].replace('## ', '').strip()
+        if any(k in header for k in keep_sections):
+            # 每段最多保留 400 字
+            kept.append(section.strip()[:400])
+    
+    if kept:
+        return "\n\n".join(kept)
+    # 如果没匹配到段落，返回前 600 字
+    return full_memory[:600]
+
+
+def _extract_recent_24h(state):
+    """提取最近 24 小时内的对话消息，总量上限 800 字。
+    如果 24h 内不足 3 条，则兜底取最近 5 条。"""
+    beijing_tz = timezone(timedelta(hours=8))
+    now = datetime.now(beijing_tz)
+    cutoff = now - timedelta(hours=24)
+    cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M")
+
+    messages = state.get("recent_messages", [])
+    
+    # 按时间过滤 24 小时内的消息
+    recent_24h = []
+    for m in messages:
+        if m.get("role") == "system":
+            continue
+        msg_time = m.get("time", "")
+        if msg_time >= cutoff_str:
+            recent_24h.append(m)
+    
+    # 兜底：24h 内不足 3 条，取最近 5 条非 system 消息
+    if len(recent_24h) < 3:
+        non_system = [m for m in messages if m.get("role") != "system"]
+        recent_24h = non_system[-5:]
+    
+    # 构建文本，总量上限 800 字
+    lines = []
+    total_len = 0
+    for m in recent_24h:
+        role = "用户" if m.get("role") == "user" else "Karvis"
+        content = m.get("content", "")[:150]
+        line = f"[{m.get('time', '')}] {role}: {content}"
+        if total_len + len(line) > 800:
+            break
+        lines.append(line)
+        total_len += len(line)
+    
+    return "\n".join(lines) if lines else "（暂无最近对话）"
 
 
 def _build_state_summary(state):
@@ -709,8 +807,17 @@ def _build_state_summary(state):
         daily_top3 = {"items": daily_top3, "date": ""}
     if daily_top3 and daily_top3.get("items"):
         beijing_tz = timezone(timedelta(hours=8))
-        today_str = datetime.now(beijing_tz).strftime("%Y-%m-%d")
+        today = datetime.now(beijing_tz)
+        today_str = today.strftime("%Y-%m-%d")
         top3_date = daily_top3.get("date", "")
+        # 计算距今天数
+        days_ago = 999
+        if top3_date:
+            try:
+                top3_dt = datetime.strptime(top3_date, "%Y-%m-%d")
+                days_ago = (today - top3_dt.replace(tzinfo=beijing_tz)).days
+            except Exception:
+                pass
         items = daily_top3["items"]
         items_str = " / ".join(
             f"{'✅' if i.get('done') else '⬜'} {i.get('text', '')}"
@@ -718,8 +825,9 @@ def _build_state_summary(state):
         )
         if top3_date == today_str:
             parts.append(f"今日 Top 3: {items_str}")
-        else:
+        elif days_ago == 1:
             parts.append(f"昨日({top3_date}) Top 3: {items_str}")
+        # 超过 1 天的过期 Top 3 不再显示，避免干扰 LLM
 
     # V3-F11: 活跃实验
     exp = state.get("active_experiment")
@@ -748,6 +856,34 @@ def _build_state_summary(state):
             parts.append(f"待复盘决策({len(unreviewed)}): {topics}")
         else:
             parts.append(f"待复盘决策: {len(unreviewed)} 个")
+
+    # V14: 情绪趋势摘要（最近 7 天）
+    mood_scores = state.get("mood_scores", [])
+    if mood_scores:
+        beijing_tz = timezone(timedelta(hours=8))
+        today = datetime.now(beijing_tz).date()
+        cutoff = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+        recent_moods = [s for s in mood_scores if s.get("date", "") >= cutoff]
+        if recent_moods:
+            scores_val = [s.get("score", 5) for s in recent_moods]
+            avg = sum(scores_val) / len(scores_val)
+            latest = recent_moods[-1]
+            # 趋势判断
+            if len(scores_val) >= 3:
+                first_half = scores_val[:len(scores_val)//2]
+                second_half = scores_val[len(scores_val)//2:]
+                avg_first = sum(first_half) / len(first_half)
+                avg_second = sum(second_half) / len(second_half)
+                if avg_second - avg_first > 1:
+                    trend = "↑ 回升中"
+                elif avg_first - avg_second > 1:
+                    trend = "↓ 下滑中"
+                else:
+                    trend = "→ 平稳"
+            else:
+                trend = ""
+            latest_label = f", 最近: {latest.get('score')}/10({latest.get('label', '')})" if latest.get("label") else f", 最近: {latest.get('score')}/10"
+            parts.append(f"情绪趋势(7天): 均分{avg:.1f}/10 {trend}{latest_label}")
 
     return "\n".join(parts) if parts else "无特殊状态"
 
@@ -811,7 +947,7 @@ def process(payload, send_fn=None, ctx=None):
     _log(f"[Brain][耗时] state读取: {t_state - t_token:.1f}s")
 
     # 3. 检查打卡超时
-    _check_checkin_timeout(state)
+    _check_checkin_timeout(state, ctx)
 
     # 4. 记录用户消息到短期记忆 + 更新 nudge_state（F5）
     if user_text and payload.get("type") != "system":
@@ -835,16 +971,18 @@ def process(payload, send_fn=None, ctx=None):
         if send_fn and reply:
             try:
                 send_fn(reply)
+                _log(f"[Brain] 回复已发送(shortcut): {reply[:200]}")
             except Exception as e:
                 _log(f"[Brain] 发送失败: {e}")
         _save_state_and_memory(state, decision, payload=payload, reply=reply,
                                elapsed=_time.time() - t_start, ctx=ctx)
         return {"reply": reply}
 
-    # 5. 构建 prompt 并调用 LLM（prompt_futs 在步骤 1 已提交，此处直接取结果）
+    # 5. 构建 prompt 并调用 LLM
     system_prompt = build_system_prompt(state, ctx, prompt_futs=prompt_futs, payload=payload)
     t_prompt = _time.time()
     _log(f"[Brain][耗时] prompt组装: {t_prompt - t_state:.1f}s (prompt长度={len(system_prompt)})")
+    _log(f"[Brain] system_prompt前800字:\n{system_prompt[:80000]}")
 
     user_message = _build_user_message(payload)
 
@@ -856,6 +994,20 @@ def process(payload, send_fn=None, ctx=None):
     _log(f"[Brain] 模型路由: tier={model_tier}, is_system={is_system}, action={action}"
          f"{', model=Claude' if use_claude else ', model=DeepSeek'}")
 
+    # ===== V15: Gateway Mode (Function Calling) =====
+    # 环境变量 USE_GATEWAY=1 启用新模式，默认走旧模式保持兼容
+    _use_gateway = os.environ.get("USE_GATEWAY", "1") == "1"
+    if _use_gateway and not is_system:
+        result = _process_gateway_mode(
+            system_prompt, user_message, state, ctx, payload,
+            user_text, model_tier, send_fn, t_start, t_prompt
+        )
+        if result is not None:
+            return result
+        # Gateway 返回 None 表示降级到旧模式
+        _log("[Brain] Gateway mode 降级到旧模式")
+
+    # ===== 旧模式（JSON 输出） =====
     llm_response = call_llm([
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message}
@@ -889,14 +1041,17 @@ def process(payload, send_fn=None, ctx=None):
     #    Stage 2: Flash 后判 — 回复发出后异步调 Flash 判断是否值得写入
     primary_skill = _get_primary_skill(decision)
 
-    # Reflect 防护 — reflect_pending 时，非 reflect skill 强制重路由（优先级低于 checkin）
+    # Reflect 防护 — reflect_pending 时，仅当 LLM 选了 ignore 才重路由为 reflect.answer
+    # 如果 LLM 已明确选了其他有意图的 skill（如 classify.archive/todo.add），
+    # 说明用户不是在回答深度自问，尊重 LLM 的判断
     _REFLECT_SKILLS = ("reflect.answer", "reflect.skip", "reflect.history", "reflect.push")
     _CHECKIN_SKILLS = ("checkin.answer", "checkin.skip", "checkin.cancel", "checkin.start")
     if (state.get("reflect_pending")
             and not state.get("checkin_pending")
             and payload.get("type") != "system"
             and primary_skill not in _REFLECT_SKILLS
-            and primary_skill not in _CHECKIN_SKILLS):
+            and primary_skill not in _CHECKIN_SKILLS
+            and primary_skill == "ignore"):
         _log(f"[Brain] 深度自问防护: {primary_skill} → reflect.answer")
         decision["skill"] = "reflect.answer"
         decision["params"] = {"answer": user_text}
@@ -975,7 +1130,7 @@ def process(payload, send_fn=None, ctx=None):
     if send_fn and reply:
         try:
             send_fn(reply)
-            _log(f"[Brain] 回复已先行发送，开始后台保存")
+            _log(f"[Brain] 回复已发送: {reply[:200]}")
         except Exception as e:
             _log(f"[Brain] 先行发送失败: {e}")
 
@@ -1001,6 +1156,169 @@ def process(payload, send_fn=None, ctx=None):
                      user_text, None)
 
     return {"reply": reply, "already_sent": bool(send_fn and reply)}
+
+
+# ============ V15: Gateway Mode (Function Calling) ============
+
+def _process_gateway_mode(system_prompt, user_message, state, ctx, payload,
+                          user_text, model_tier, send_fn, t_start, t_prompt):
+    """
+    使用原生 Function Calling + Gateway Loop 处理用户消息。
+    返回 result dict 或 None（降级到旧模式）。
+    """
+    try:
+        from gateway import gateway_loop, GatewayResult
+        from tool_schema import build_tools
+        from skill_loader import get_skills_for_prompt
+
+        # 1. 构建 tools 列表（按用户权限过滤）
+        allowed_names = get_skills_for_prompt(ctx)
+        # Local 模式：屏蔽 internal.search（grep 更强）
+        # OneDrive 模式：屏蔽 internal.grep（依赖本地文件系统）
+        if ctx.storage_mode != "onedrive":
+            allowed_names = [n for n in allowed_names if n != "internal.search"]
+        else:
+            allowed_names = [n for n in allowed_names if n != "internal.grep"]
+        tools = build_tools(allowed_names)
+        _log(f"[Brain][Gateway] 构建 tools: {len(tools)} 个")
+
+        # 2. 构建 System Prompt（Gateway 模式不需要 OUTPUT_FORMAT 段）
+        # 移除旧的 JSON 输出格式要求，改为自然对话 + 工具调用
+        gateway_system = _build_gateway_system_prompt(system_prompt)
+
+        # 3. 构建消息
+        messages = [
+            {"role": "system", "content": gateway_system},
+            {"role": "user", "content": user_message},
+        ]
+
+        # 4. 运行 Gateway Loop
+        registry = _get_skill_registry()
+        gw_result = gateway_loop(
+            messages=messages,
+            tools=tools,
+            registry=registry,
+            ctx=ctx,
+            state=state,
+            model_tier=model_tier,
+            max_tokens=800,
+            temperature=0.3,
+        )
+        t_gw = _time.time()
+        _log(f"[Brain][Gateway] Loop 完成: {t_gw - t_prompt:.1f}s, "
+             f"skills={[s[0] for s in gw_result.executed_skills]}, "
+             f"reply_len={len(gw_result.reply)}")
+
+        if not gw_result.reply and not gw_result.has_tool_calls:
+            # Gateway 无有效结果，降级
+            return None
+
+        # 5. 应用 state_updates
+        if gw_result.state_updates:
+            state.update(gw_result.state_updates)
+
+        # 6. Quick-Notes 过滤
+        primary_skill = gw_result.primary_skill
+        _pending_note_filter = False
+        if payload.get("type") != "system" and primary_skill not in (
+            "checkin.answer", "checkin.skip", "checkin.cancel", "checkin.start",
+            "reflect.answer", "reflect.skip"
+        ):
+            if primary_skill in _SKIP_NOTE_SKILLS:
+                pass
+            elif primary_skill == "note.save":
+                _save_to_quick_notes(payload, state, ctx)
+            else:
+                _pending_note_filter = True
+
+        # 7. 兜底回复
+        reply = gw_result.reply
+        if not reply and payload.get("type") != "system":
+            if gw_result.memory_updates:
+                reply = "记住啦~"
+            elif primary_skill == "note.save":
+                reply = "已记录 ✅"
+            else:
+                reply = "好的~"
+
+        if reply:
+            add_message_to_state(state, "karvis", reply)
+
+        # 8. 先发回复
+        if send_fn and reply:
+            try:
+                send_fn(reply)
+                _log(f"[Brain][Gateway] 回复已发送: {reply[:200]}")
+            except Exception as e:
+                _log(f"[Brain][Gateway] 发送失败: {e}")
+
+        # 9. 异步 Flash 过滤
+        if _pending_note_filter:
+            _executor.submit(_flash_filter_and_save, payload, state, ctx, primary_skill)
+
+        # 10. 更新用户节奏
+        try:
+            _update_user_rhythm(state)
+        except Exception as e:
+            _log(f"[Brain][Gateway] 节奏更新失败: {e}")
+
+        # 11. 保存 state + memory
+        decision = gw_result.to_decision_dict()
+        t_save_start = _time.time()
+        _save_state_and_memory(state, decision, payload=payload, reply=reply,
+                               elapsed=t_save_start - t_start, ctx=ctx)
+        t_end = _time.time()
+        _log(f"[Brain][Gateway][耗时] 保存: {t_end - t_save_start:.1f}s | 总计: {t_end - t_start:.1f}s")
+
+        # 12. 异步告警
+        _executor.submit(_check_and_alert, t_end - t_start,
+                         payload.get("user_id", "unknown"), primary_skill, user_text, None)
+
+        return {"reply": reply, "already_sent": bool(send_fn and reply)}
+
+    except Exception as e:
+        _log(f"[Brain][Gateway] 异常，降级到旧模式: {e}")
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return None
+
+
+def _build_gateway_system_prompt(original_system_prompt):
+    """将旧的 system prompt 转化为 Gateway 模式（移除 OUTPUT_FORMAT 段，添加工具使用说明）"""
+    import prompts
+
+    # 移除旧的 OUTPUT_FORMAT 段（JSON 输出格式要求）
+    prompt = original_system_prompt
+    if prompts.OUTPUT_FORMAT in prompt:
+        prompt = prompt.replace(prompts.OUTPUT_FORMAT, "")
+
+    # 移除旧的 SKILLS 段（因为 tools 已通过 JSON Schema 传递）
+    # 查找并移除 "# 可用 Skill" 段落
+    skill_header = "# 可用 Skill（参数均为 JSON）"
+    if skill_header in prompt:
+        idx = prompt.find(skill_header)
+        # 找到下一个 # 标题或结尾
+        next_section = prompt.find("\n# ", idx + len(skill_header))
+        if next_section >= 0:
+            prompt = prompt[:idx] + prompt[next_section:]
+        else:
+            prompt = prompt[:idx]
+
+    # 添加 Gateway 模式的简短说明
+    gateway_instructions = """
+## 工具使用说明
+- 你可以调用提供的工具（functions）来执行操作。工具列表已通过 API 传递。
+- 如果用户的消息需要执行操作（添加待办、归档笔记、打卡等），调用对应工具。
+- 如果只是闲聊或不需要任何操作，直接回复文本即可。
+- 你可以在一次回复中调用多个工具（并行执行）。
+- 调用工具后，你会收到执行结果，然后生成最终回复。
+- 回复要简洁自然，像朋友聊天。
+
+## 记忆更新
+当用户透露重要信息（自我介绍/偏好/人际关系/重大事件）时，在回复中自然提及即可，系统会自动处理记忆更新。
+"""
+    prompt = prompt.rstrip() + "\n" + gateway_instructions
+    return prompt
 
 
 def _save_state_and_memory(state, decision, payload=None, reply=None, elapsed=None, ctx=None):
@@ -1318,7 +1636,13 @@ def _resolve_reply(user_text, decision, steps, step_results):
 
     # 快速路径 2：所有 step 都是简单 skill
     if all(s in _SIMPLE_SKILLS for s in all_skills):
-        # 优先用 skill 返回的 reply，其次用 LLM 预生成的 reply
+        # 检查是否有 skill 标记了 prefer_llm_reply（如 settings.soul）
+        # 此时优先用 LLM 预生成的更自然的回复
+        for sr in step_results:
+            r = sr.get("result", {})
+            if isinstance(r, dict) and r.get("prefer_llm_reply") and llm_reply:
+                return llm_reply
+        # 默认：优先用 skill 返回的 reply，其次用 LLM 预生成的 reply
         for sr in step_results:
             r = sr.get("result", {})
             if isinstance(r, dict) and r.get("reply"):
@@ -1568,6 +1892,22 @@ def _parse_llm_output(text):
     except json.JSONDecodeError:
         pass
 
+    # 修复双花括号 {{ → {（LLM 模仿 prompt 示例中的转义语法）
+    if "{{" in text:
+        fixed = text.replace("{{", "{").replace("}}", "}")
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            pass
+        # 在修复后的文本中提取 JSON 块
+        start = fixed.find("{")
+        end = fixed.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(fixed[start:end + 1])
+            except json.JSONDecodeError:
+                pass
+
     # 尝试提取 JSON 块
     start = text.find("{")
     end = text.rfind("}")
@@ -1577,8 +1917,15 @@ def _parse_llm_output(text):
         except json.JSONDecodeError:
             pass
 
-    _log(f"[Brain] 无法解析 JSON: {text[:200]}")
-    return None
+    # 兜底：LLM 返回纯文本（未遵守 JSON 格式），降级为 ignore + 原文作为 reply
+    _log(f"[Brain] 无法解析 JSON，降级为纯文本回复: {text[:200]}")
+    return {
+        "thinking": "LLM 未返回 JSON，降级处理",
+        "skill": "ignore",
+        "params": {},
+        "reply": text,
+        "memory_updates": []
+    }
 
 
 def _update_nudge_state(state):
@@ -1621,7 +1968,7 @@ def _update_nudge_state(state):
         nudge["last_message_date"] = today_str
 
 
-def _check_checkin_timeout(state):
+def _check_checkin_timeout(state, ctx=None):
     """检查打卡是否超时"""
     if not state.get("checkin_pending"):
         return
@@ -1639,7 +1986,13 @@ def _check_checkin_timeout(state):
         if diff > CHECKIN_TIMEOUT_SECONDS:
             _log(f"[Brain] 打卡超时 ({diff:.0f}s)")
             from skills import checkin_flow
-            checkin_flow.finish(state, timeout=True)
+            try:
+                checkin_flow.finish(state, ctx, timeout=True)
+            except Exception as e2:
+                _log(f"[Brain] 打卡超时 finish 失败，强制清理状态: {e2}")
+                state["checkin_pending"] = False
+                state["checkin_step"] = 0
+                state["checkin_answers"] = []
     except Exception as e:
         _log(f"[Brain] 打卡超时检查异常: {e}")
 

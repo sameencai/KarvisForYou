@@ -18,7 +18,8 @@ Duck Typing 协议 — LocalFileIO 和 OneDriveIO 都实现以下方法：
 import sys
 
 def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+    from logger import log
+    log(msg)
 
 
 def create_storage(storage_mode: str, onedrive_config: dict = None):

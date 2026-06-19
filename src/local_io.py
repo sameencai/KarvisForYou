@@ -9,7 +9,8 @@ import sys
 import threading
 
 def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+    from logger import log
+    log(msg)
 
 
 class LocalFileIO:

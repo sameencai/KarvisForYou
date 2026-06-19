@@ -20,8 +20,8 @@ from datetime import datetime, timezone, timedelta as _td
 _BEIJING_TZ = timezone(_td(hours=8))
 
 def _log(msg):
-    ts = datetime.now(_BEIJING_TZ).strftime("%H:%M:%S")
-    print(f"{ts} {msg}", file=sys.stderr, flush=True)
+    from logger import log
+    log(msg)
 
 
 # 全局 Session：所有 OneDriveIO 实例共享 TCP 连接池
